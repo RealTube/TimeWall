@@ -10,18 +10,28 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
+  "windows": [
       {
-        "title": "Reality Check - Dashboard",
+        "label": "main",
+        "title": "Hima - Dashboard",
         "width": 1000,
         "height": 700,
         "minWidth": 800,
         "minHeight": 600,
-        "resizable": true,
-        "maximizable": true,
-        "fullscreen": false,
         "center": true,
-        "decorations": true
+        "visible": false 
+      },
+      {
+        "label": "prompt",
+        "title": "Hima Prompt",
+        "url": "/#/prompt",
+        "width": 600,
+        "height": 150,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {
