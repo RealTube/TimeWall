@@ -254,6 +254,7 @@ pub fn set_pause(app: AppHandle, state: State<AppState>, paused: bool) -> Result
             rearm(&conn)?;
         }
     }
+    crate::tray::update_pause_label(&app);
     let _ = app.emit("refresh-dashboard", ());
     Ok(())
 }
@@ -283,6 +284,7 @@ pub fn pause_for(app: AppHandle, state: State<AppState>, minutes: i64) -> Result
         let until = Utc::now().timestamp() + m * 60;
         db::set_setting(&conn, "paused_until", &until.to_string())?;
     }
+    crate::tray::update_pause_label(&app);
     let _ = app.emit("refresh-dashboard", ());
     Ok(())
 }

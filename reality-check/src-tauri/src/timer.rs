@@ -153,6 +153,7 @@ fn tick(app: &AppHandle) {
             let (_fire, armed) = evaluate_due(now, 0, interval_min * 60, align);
             let _ = db::set_setting(&conn, "next_prompt_at", &armed.to_string());
         }
+        crate::tray::update_pause_label(app);
         let _ = app.emit("refresh-dashboard", ());
         return;
     }

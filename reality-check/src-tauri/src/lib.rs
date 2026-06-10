@@ -19,7 +19,7 @@ use crate::db::AppState;
 
 /// Map a `String` error into something `?`-compatible with Tauri's setup hook.
 fn boxed(e: String) -> Box<dyn std::error::Error> {
-    Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+    Box::new(std::io::Error::other(e))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
