@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+/* Class-based dark mode (we toggle `.dark` on <html> ourselves). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic tokens resolve to the CSS variables below, so a single `.dark`
+   toggle re-themes every utility (bg-surface, text-muted, border-border, …). */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-productive: var(--productive);
+  --color-busywork: var(--busywork);
+  --color-idle: var(--idle);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "Inter", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.75rem;
+
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-float: 0 12px 48px rgba(0, 0, 0, 0.28);
+
+  --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root {
+  --bg: #f6f6f7;
+  --surface: #ffffff;
+  --surface-2: #f0f0f2;
+  --fg: #19191d;
+  --muted: #6c6c76;
+  --border: #e6e6ea;
+  --accent: #2f6df6;
+  --accent-fg: #ffffff;
+  --productive: #1fb255;
+  --busywork: #f0883e;
+  --idle: #a8a8b0;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #08080a;
+  --surface: #141417;
+  --surface-2: #1c1c20;
+  --fg: #f4f4f6;
+  --muted: #8d8d97;
+  --border: #2a2a30;
+  --accent: #5b8def;
+  --accent-fg: #08080a;
+  --productive: #30d158;
+  --busywork: #ff9f0a;
+  --idle: #8a8a93;
+  color-scheme: dark;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background-color: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+  }
+  /* The prompt window is transparent so the OS material shows through. */
+  html.prompt,
+  html.prompt body,
+  html.prompt #root {
+    background: transparent !important;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@layer utilities {
+  /* Frosted card used by the prompt + elevated surfaces. */
+  .glass {
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    backdrop-filter: saturate(180%) blur(28px);
+    -webkit-backdrop-filter: saturate(180%) blur(28px);
+  }
+  .drag {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
