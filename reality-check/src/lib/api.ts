@@ -9,7 +9,10 @@ import type {
   Category,
   CategorySlice,
   DayTotal,
+  FocusStats,
+  HeatCell,
   ThemePreference,
+  TopActivity,
 } from "./types";
 
 const hasTauri =
@@ -41,7 +44,9 @@ export const api = {
   setTheme: (theme: ThemePreference) =>
     call<void>("update_setting", { key: "theme", value: theme }),
   setPause: (paused: boolean) => call<void>("set_pause", { paused }),
+  pauseFor: (minutes: number) => call<void>("pause_for", { minutes }),
   snooze: (minutes = 5) => call<void>("snooze", { minutes }),
+  nextPromptAt: () => call<number>("get_next_prompt_at"),
 
   // Categories
   categories: () => call<Category[]>("list_categories"),
@@ -56,6 +61,17 @@ export const api = {
     call<DayTotal[]>("get_day_totals", { start, end }),
   categoryBreakdown: (start: string, end: string) =>
     call<CategorySlice[]>("get_category_breakdown", { start, end }),
+  hourlyHeatmap: (start: string, end: string) =>
+    call<HeatCell[]>("get_hourly_heatmap", { start, end }),
+  topActivities: (start: string, end: string, limit = 8) =>
+    call<TopActivity[]>("get_top_activities", { start, end, limit }),
+  focusStats: (start: string, end: string) =>
+    call<FocusStats>("get_focus_stats", { start, end }),
+
+  // Data ownership
+  exportCsv: (start: string, end: string) =>
+    call<string | null>("export_csv", { start, end }),
+  eraseAllEntries: () => call<number>("erase_all_entries"),
 
   // Autostart
   setAutostart: (enabled: boolean) => call<void>("set_autostart", { enabled }),

@@ -13,9 +13,10 @@ use crate::db::{self, AppState};
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Hima", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause / Resume", true, None::<&str>)?;
+    let pause_hour = MenuItem::with_id(app, "pause-hour", "Pause for 1 hour", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Hima", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &pause, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &pause, &pause_hour, &sep, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("hima-tray")
         .tooltip("Hima — your 15-minute reality check")
@@ -24,6 +25,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main(app),
             "pause" => toggle_pause(app),
+            "pause-hour" => pause_for_an_hour(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -52,6 +54,19 @@ fn show_main(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+/// The lunch/meeting case: silence prompts for an hour; the timer clears the
+/// marker and resumes by itself (see `timer::tick`).
+fn pause_for_an_hour(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    if let Ok(conn) = state.conn.lock() {
+        let until = chrono::Utc::now().timestamp() + 3600;
+        let _ = db::set_setting(&conn, "paused_until", &until.to_string());
+    }
+    let _ = app.emit("refresh-dashboard", ());
 }
 
 fn toggle_pause(app: &AppHandle) {

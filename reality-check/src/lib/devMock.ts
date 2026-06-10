@@ -1,7 +1,16 @@
 // DEV-only fixture data so the UI can be developed/previewed in a plain browser
 // (no Tauri host). Tree-shaken out of production builds via `import.meta.env.DEV`.
 
-import type { ActivityLog, AppSettings, Category, CategorySlice, DayTotal } from "./types";
+import type {
+  ActivityLog,
+  AppSettings,
+  Category,
+  CategorySlice,
+  DayTotal,
+  FocusStats,
+  HeatCell,
+  TopActivity,
+} from "./types";
 
 const categories: Category[] = [
   { id: 1, name: "Deep Work", color: "#5B8DEF", is_productive: true, sort_order: 0 },
@@ -26,12 +35,17 @@ const logs: ActivityLog[] = [
 const settings: AppSettings = {
   interval_minutes: 15,
   paused: false,
+  paused_until: 0,
   idle_threshold_min: 5,
   align_to_clock: true,
   theme: "dark",
   notifications: true,
   sound: true,
   onboarded: true,
+  schedule_enabled: true,
+  schedule_start_min: 540,
+  schedule_end_min: 1080,
+  schedule_days: "1,2,3,4,5",
 };
 
 const breakdown: CategorySlice[] = [
@@ -42,20 +56,56 @@ const breakdown: CategorySlice[] = [
   { category_id: 5, name: "Break", color: "#9CA3AF", is_productive: false, minutes: 120 },
 ];
 
-function weekTotals(start?: string): DayTotal[] {
-  const base = start ? new Date(`${start}T00:00:00`) : new Date();
-  const worked = [330, 300, 360, 270, 240, 60, 0];
-  const idle = [30, 45, 15, 60, 30, 0, 0];
+const topActivities: TopActivity[] = [
+  { activity: "Spec for v2 dashboard", minutes: 330, count: 22 },
+  { activity: "Outreach emails", minutes: 240, count: 16 },
+  { activity: "Code review", minutes: 180, count: 12 },
+  { activity: "Team standup", minutes: 120, count: 8 },
+  { activity: "Inbox zero", minutes: 90, count: 6 },
+  { activity: "Reviewed Q3 numbers", minutes: 60, count: 4 },
+];
+
+const focus: FocusStats = {
+  avg_block_min: 38,
+  longest_block_min: 105,
+  switches_per_day: 9.4,
+  days_counted: 5,
+};
+
+function heatmap(): HeatCell[] {
+  // A believable shape: deep mornings, meeting-heavy early afternoons.
+  const cells: HeatCell[] = [];
+  for (let d = 0; d < 5; d++) {
+    for (let h = 8; h <= 18; h++) {
+      const morning = h >= 9 && h <= 11 ? 45 : 0;
+      const afternoon = h >= 13 && h <= 16 ? 30 : 0;
+      const noise = ((d * 7 + h * 3) % 4) * 5;
+      const minutes = Math.min(60, morning + afternoon + noise);
+      if (minutes > 0) cells.push({ weekday: d, hour: h, minutes });
+    }
+  }
+  return cells;
+}
+
+function rangeTotals(start?: string, end?: string): DayTotal[] {
+  const first = start ? new Date(`${start}T00:00:00`) : new Date();
+  const last = end ? new Date(`${end}T00:00:00`) : new Date();
   const p = (n: number) => String(n).padStart(2, "0");
-  return worked.map((w, i) => {
-    const d = new Date(base);
-    d.setDate(base.getDate() + i);
-    return {
+  const out: DayTotal[] = [];
+  const d = new Date(first);
+  let i = 0;
+  while (d <= last && out.length < 62) {
+    const dow = d.getDay();
+    const weekend = dow === 0 || dow === 6;
+    out.push({
       date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
-      worked_minutes: w,
-      idle_minutes: idle[i],
-    };
-  });
+      worked_minutes: weekend ? (dow === 6 ? 60 : 0) : 240 + ((i * 53) % 180),
+      idle_minutes: weekend ? 0 : 15 + ((i * 31) % 60),
+    });
+    d.setDate(d.getDate() + 1);
+    i++;
+  }
+  return out;
 }
 
 export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -67,8 +117,14 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     get_recent_activities: ["Outreach emails", "Spec for v2 dashboard", "Code review", "Team standup"],
     get_interval: 15,
     get_autostart: false,
-    get_day_totals: weekTotals(args?.start as string | undefined),
+    get_next_prompt_at: Math.floor(Date.now() / 1000) + 540,
+    get_day_totals: rangeTotals(args?.start as string | undefined, args?.end as string | undefined),
     get_category_breakdown: breakdown,
+    get_hourly_heatmap: heatmap(),
+    get_top_activities: topActivities,
+    get_focus_stats: focus,
+    export_csv: "C:/Users/dev/Downloads/hima-export.csv",
+    erase_all_entries: logs.length,
   };
   return Promise.resolve((value[cmd] ?? null) as T);
 }

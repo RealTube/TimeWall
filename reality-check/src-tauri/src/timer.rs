@@ -11,13 +11,47 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::thread;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{Datelike, Local, Timelike, Utc};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::db::{self, AppState, IDLE_LABEL};
 
 const TICK_SECS: u64 = 5;
+
+/// Whether prompting is allowed right now under the active schedule (FR-2.5).
+///
+/// `days` is the `schedule_days` CSV of ISO weekdays (Mon=1 … Sun=7);
+/// `start_min`/`end_min` are minutes from local midnight. A start equal to the
+/// end means "all day" (never lock the user out by accident); a start after
+/// the end is an overnight window (e.g. 22:00–06:00).
+pub fn within_schedule(
+    enabled: bool,
+    days_csv: &str,
+    start_min: i64,
+    end_min: i64,
+    weekday_iso: u32,
+    minute_of_day: i64,
+) -> bool {
+    if !enabled {
+        return true;
+    }
+    let day_ok = days_csv
+        .split(',')
+        .filter_map(|d| d.trim().parse::<u32>().ok())
+        .any(|d| d == weekday_iso);
+    if !day_ok {
+        return false;
+    }
+    if start_min == end_min {
+        return true;
+    }
+    if start_min < end_min {
+        (start_min..end_min).contains(&minute_of_day)
+    } else {
+        minute_of_day >= start_min || minute_of_day < end_min
+    }
+}
 
 /// Pure scheduling decision, factored out so it can be unit-tested.
 ///
@@ -59,12 +93,25 @@ fn tick(app: &AppHandle) {
     };
 
     // Read scheduling settings under a short lock.
-    let (paused, interval_min, align, idle_threshold_min, next_at, notify) = {
+    #[allow(clippy::type_complexity)]
+    let (paused, paused_until, interval_min, align, idle_threshold_min, next_at, notify, schedule): (
+        bool,
+        i64,
+        i64,
+        bool,
+        i64,
+        i64,
+        bool,
+        (bool, String, i64, i64),
+    ) = {
         let Ok(conn) = state.conn.lock() else {
             return;
         };
         (
             db::get_setting_or(&conn, "paused", "0") == "1",
+            db::get_setting_or(&conn, "paused_until", "0")
+                .parse()
+                .unwrap_or(0),
             db::get_setting_or(&conn, "interval_minutes", "15")
                 .parse()
                 .unwrap_or(15),
@@ -76,6 +123,16 @@ fn tick(app: &AppHandle) {
                 .parse()
                 .unwrap_or(0),
             db::get_setting_or(&conn, "notifications", "1") == "1",
+            (
+                db::get_setting_or(&conn, "schedule_enabled", "0") == "1",
+                db::get_setting_or(&conn, "schedule_days", "1,2,3,4,5"),
+                db::get_setting_or(&conn, "schedule_start_min", "540")
+                    .parse()
+                    .unwrap_or(540),
+                db::get_setting_or(&conn, "schedule_end_min", "1080")
+                    .parse()
+                    .unwrap_or(1080),
+            ),
         )
     };
 
@@ -84,6 +141,22 @@ fn tick(app: &AppHandle) {
     }
 
     let now = Utc::now().timestamp();
+
+    // A temporary pause ("pause for 1 hour") expires on its own: clear the
+    // marker, re-arm from now, and let the next tick resume normally.
+    if paused_until > 0 {
+        if paused_until > now {
+            return;
+        }
+        if let Ok(conn) = state.conn.lock() {
+            let _ = db::set_setting(&conn, "paused_until", "0");
+            let (_fire, armed) = evaluate_due(now, 0, interval_min * 60, align);
+            let _ = db::set_setting(&conn, "next_prompt_at", &armed.to_string());
+        }
+        let _ = app.emit("refresh-dashboard", ());
+        return;
+    }
+
     let (fire, new_next) = evaluate_due(now, next_at, interval_min * 60, align);
 
     if new_next != next_at {
@@ -93,6 +166,20 @@ fn tick(app: &AppHandle) {
     }
 
     if !fire {
+        return;
+    }
+
+    // Outside working hours Hima stays silent and records nothing (FR-2.5).
+    let local = Local::now();
+    let (s_enabled, s_days, s_start, s_end) = schedule;
+    if !within_schedule(
+        s_enabled,
+        &s_days,
+        s_start,
+        s_end,
+        local.weekday().number_from_monday(),
+        i64::from(local.hour()) * 60 + i64::from(local.minute()),
+    ) {
         return;
     }
 
@@ -137,6 +224,50 @@ fn current_idle_secs() -> i64 {
     match user_idle::UserIdle::get_time() {
         Ok(idle) => idle.as_seconds() as i64,
         Err(_) => 0,
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::within_schedule;
+
+    #[test]
+    fn disabled_schedule_always_allows() {
+        assert!(within_schedule(false, "", 540, 1080, 7, 0));
+    }
+
+    #[test]
+    fn respects_day_selection() {
+        // Mon–Fri only: Saturday (6) is out, Wednesday (3) is in.
+        assert!(!within_schedule(true, "1,2,3,4,5", 540, 1080, 6, 600));
+        assert!(within_schedule(true, "1,2,3,4,5", 540, 1080, 3, 600));
+    }
+
+    #[test]
+    fn respects_time_window() {
+        // 9:00–18:00 window: 8:59 out, 9:00 in, 17:59 in, 18:00 out.
+        assert!(!within_schedule(true, "1,2,3,4,5", 540, 1080, 3, 539));
+        assert!(within_schedule(true, "1,2,3,4,5", 540, 1080, 3, 540));
+        assert!(within_schedule(true, "1,2,3,4,5", 540, 1080, 3, 1079));
+        assert!(!within_schedule(true, "1,2,3,4,5", 540, 1080, 3, 1080));
+    }
+
+    #[test]
+    fn equal_bounds_mean_all_day() {
+        assert!(within_schedule(true, "1,2,3,4,5", 600, 600, 3, 0));
+    }
+
+    #[test]
+    fn overnight_window_wraps_midnight() {
+        // 22:00–06:00: 23:00 in, 05:00 in, 12:00 out.
+        assert!(within_schedule(true, "1,2,3,4,5", 1320, 360, 3, 1380));
+        assert!(within_schedule(true, "1,2,3,4,5", 1320, 360, 3, 300));
+        assert!(!within_schedule(true, "1,2,3,4,5", 1320, 360, 3, 720));
+    }
+
+    #[test]
+    fn malformed_days_csv_blocks_safely() {
+        assert!(!within_schedule(true, "garbage", 540, 1080, 3, 600));
     }
 }
 

@@ -1,14 +1,24 @@
-import { useEffect, useState } from "react";
-import { Lock, Minus, Monitor, Moon, Plus, Sun, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { FileDown, Lock, Minus, Monitor, Moon, Plus, Sun, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAppStore } from "../lib/store";
 import type { AppSettings, Category, ThemePreference } from "../lib/types";
-import { cn } from "../lib/utils";
+import {
+  cn,
+  endOfMonthISO,
+  minutesToTimeLabel,
+  shiftISO,
+  startOfMonthISO,
+  startOfWeekISO,
+  todayISO,
+} from "../lib/utils";
 
 const PALETTE = [
   "#5B8DEF", "#A78BFA", "#34D399", "#FBBF24",
   "#38BDF8", "#F87171", "#F472B6", "#9CA3AF",
 ];
+
+const DAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"]; // ISO Mon=1 … Sun=7
 
 export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -59,6 +69,31 @@ export default function Settings() {
     api.setAutostart(on).catch(() => setAutostart(!on));
   };
 
+  const toggleSchedule = (on: boolean) => {
+    patch({ schedule_enabled: on });
+    api.updateSetting("schedule_enabled", on ? "1" : "0").catch(() => {});
+  };
+
+  const setScheduleTime = (key: "schedule_start_min" | "schedule_end_min", v: number) => {
+    patch({ [key]: v } as Partial<AppSettings>);
+    api.updateSetting(key, String(v)).catch(() => {});
+  };
+
+  const toggleDay = (day: number) => {
+    const days = new Set(
+      settings.schedule_days.split(",").map((d) => Number(d.trim())).filter(Boolean),
+    );
+    if (days.has(day)) {
+      if (days.size === 1) return; // at least one working day
+      days.delete(day);
+    } else {
+      days.add(day);
+    }
+    const csv = [...days].sort((a, b) => a - b).join(",");
+    patch({ schedule_days: csv });
+    api.updateSetting("schedule_days", csv).catch(() => {});
+  };
+
   return (
     <div className="mx-auto max-w-2xl px-10 py-12">
       <h1 className="text-3xl font-semibold tracking-tight">Settings</h1>
@@ -76,6 +111,58 @@ export default function Settings() {
         <Row label="Pause tracking" hint="Stop the prompts without quitting Hima.">
           <Toggle checked={settings.paused} onChange={togglePause} />
         </Row>
+      </Section>
+
+      <Section title="Schedule">
+        <Row
+          label="Only during work hours"
+          hint="Outside the schedule Hima stays silent and records nothing."
+        >
+          <Toggle checked={settings.schedule_enabled} onChange={toggleSchedule} />
+        </Row>
+        {settings.schedule_enabled && (
+          <>
+            <Row label="Days">
+              <div className="flex gap-1.5">
+                {DAY_LABELS.map((label, i) => {
+                  const day = i + 1;
+                  const active = settings.schedule_days
+                    .split(",")
+                    .map((d) => Number(d.trim()))
+                    .includes(day);
+                  return (
+                    <button
+                      key={day}
+                      onClick={() => toggleDay(day)}
+                      aria-pressed={active}
+                      className={cn(
+                        "grid size-8 place-items-center rounded-full text-[12px] font-semibold transition-colors",
+                        active
+                          ? "bg-accent text-accent-fg"
+                          : "bg-surface-2 text-muted hover:text-fg",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Row>
+            <Row label="Hours">
+              <div className="flex items-center gap-2">
+                <TimeSelect
+                  value={settings.schedule_start_min}
+                  onChange={(v) => setScheduleTime("schedule_start_min", v)}
+                />
+                <span className="text-[13px] text-muted">to</span>
+                <TimeSelect
+                  value={settings.schedule_end_min}
+                  onChange={(v) => setScheduleTime("schedule_end_min", v)}
+                />
+              </div>
+            </Row>
+          </>
+        )}
       </Section>
 
       <Section title="Appearance">
@@ -105,6 +192,11 @@ export default function Settings() {
           ))}
           <AddCategory onAdded={loadCategories} />
         </div>
+      </Section>
+
+      <Section title="Data">
+        <ExportRow />
+        <EraseRow />
       </Section>
 
       <div className="mt-10 flex items-start gap-2.5 rounded-xl bg-surface-2/60 px-4 py-3 text-[13px] text-muted">
@@ -243,6 +335,135 @@ function Segmented<T extends string>({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// --- Schedule --------------------------------------------------------------
+
+/** Half-hour time picker (00:00 – 23:30) rendered as a native select for full
+ *  keyboard/screen-reader support, styled to match the control family. */
+function TimeSelect({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const options = Array.from({ length: 48 }, (_, i) => i * 30);
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value))}
+      className="h-9 cursor-pointer rounded-xl bg-surface-2 px-3 text-[14px] font-medium tabular-nums focus:outline-none focus:ring-2 focus:ring-accent/40"
+    >
+      {options.map((m) => (
+        <option key={m} value={m}>
+          {minutesToTimeLabel(m)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// --- Data ownership ----------------------------------------------------------
+
+function ExportRow() {
+  const [busy, setBusy] = useState(false);
+  const [savedTo, setSavedTo] = useState<string | null>(null);
+
+  const run = async (start: string, end: string) => {
+    if (busy) return;
+    setBusy(true);
+    setSavedTo(null);
+    try {
+      const path = await api.exportCsv(start, end);
+      if (path) setSavedTo(path);
+    } catch (e) {
+      console.error("export failed", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const today = todayISO();
+  const ranges: { label: string; start: string; end: string }[] = [
+    { label: "This week", start: startOfWeekISO(today), end: shiftISO(startOfWeekISO(today), 6) },
+    { label: "This month", start: startOfMonthISO(today), end: endOfMonthISO(today) },
+    { label: "All time", start: "2000-01-01", end: "2999-12-31" },
+  ];
+
+  return (
+    <div className="rounded-xl px-3 py-2.5">
+      <div className="flex items-center justify-between gap-6">
+        <div>
+          <div className="text-[15px] font-medium">Export to CSV</div>
+          <div className="mt-0.5 text-[13px] text-muted">
+            Your audit, back in spreadsheet form — opens in Excel, Numbers, or Sheets.
+          </div>
+        </div>
+        <div className="flex shrink-0 gap-1.5">
+          {ranges.map((r) => (
+            <button
+              key={r.label}
+              disabled={busy}
+              onClick={() => run(r.start, r.end)}
+              className="flex h-9 items-center gap-1.5 rounded-xl bg-surface-2 px-3 text-[13px] font-medium text-fg transition-colors hover:bg-border/60 disabled:opacity-50"
+            >
+              <FileDown className="size-3.5" />
+              {r.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {savedTo && (
+        <p className="mt-2 truncate text-[12px] text-productive" title={savedTo}>
+          Saved to {savedTo}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Destructive action with an inline two-step confirm (no modal to mis-click). */
+function EraseRow() {
+  const [armed, setArmed] = useState(false);
+  const [done, setDone] = useState<number | null>(null);
+  const disarm = useRef<number>(0);
+
+  useEffect(() => () => window.clearTimeout(disarm.current), []);
+
+  const click = async () => {
+    if (!armed) {
+      setArmed(true);
+      setDone(null);
+      disarm.current = window.setTimeout(() => setArmed(false), 4000);
+      return;
+    }
+    window.clearTimeout(disarm.current);
+    setArmed(false);
+    try {
+      setDone(await api.eraseAllEntries());
+    } catch (e) {
+      console.error("erase failed", e);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-6 rounded-xl px-3 py-2.5">
+      <div>
+        <div className="text-[15px] font-medium">Erase all entries</div>
+        <div className="mt-0.5 text-[13px] text-muted">
+          {done !== null
+            ? `Deleted ${done} entr${done === 1 ? "y" : "ies"}.`
+            : "Permanently deletes every check-in. Categories and settings stay."}
+        </div>
+      </div>
+      <button
+        onClick={click}
+        className={cn(
+          "h-9 shrink-0 rounded-xl px-3 text-[13px] font-medium transition-colors",
+          armed
+            ? "bg-red-500 text-white"
+            : "bg-surface-2 text-red-500 hover:bg-red-500/10",
+        )}
+      >
+        {armed ? "Click again to confirm" : "Erase…"}
+      </button>
     </div>
   );
 }

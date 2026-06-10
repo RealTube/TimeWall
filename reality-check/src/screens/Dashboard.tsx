@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { motion } from "framer-motion";
-import { Check, MoonStar, Pencil, Trash2, X } from "lucide-react";
+import { Check, MoonStar, Pencil, Timer, Trash2, X } from "lucide-react";
 import { api } from "../lib/api";
 import type { ActivityLog, AppSettings, Category } from "../lib/types";
-import { cn, formatDuration, greeting, hhmm } from "../lib/utils";
+import { cn, countdownLabel, formatDuration, greeting, hhmm, secondsUntil } from "../lib/utils";
 import { ProgressRing } from "../components/ui/ProgressRing";
 
 const WORKDAY_MIN = 8 * 60;
@@ -13,18 +13,26 @@ export default function Dashboard() {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [nextAt, setNextAt] = useState(0);
+  const [, setClockTick] = useState(0); // re-render so the countdown stays fresh
 
   const load = useCallback(() => {
     api.todaysLogs().then(setLogs).catch(() => {});
     api.settings().then(setSettings).catch(() => {});
     api.categories().then(setCategories).catch(() => {});
+    api.nextPromptAt().then(setNextAt).catch(() => {});
   }, []);
 
   useEffect(() => {
     load();
     const un = listen("refresh-dashboard", load);
+    const tick = window.setInterval(() => {
+      setClockTick((t) => t + 1);
+      api.nextPromptAt().then(setNextAt).catch(() => {});
+    }, 30_000);
     return () => {
       un.then((f) => f());
+      window.clearInterval(tick);
     };
   }, [load]);
 
@@ -41,6 +49,32 @@ export default function Dashboard() {
   const idleMin = idleCount * interval;
   const ringValue = Math.min(1, workedMin / WORKDAY_MIN);
   const animatedHours = useCountUp(workedMin / 60);
+
+  // Today's worked minutes per category, for the distribution strip.
+  const todaySlices = useMemo(() => {
+    const acc = new Map<string, { name: string; color: string; minutes: number }>();
+    worked.forEach((l) => {
+      const cat = l.category_id ? catMap.get(l.category_id) : undefined;
+      const key = cat ? String(cat.id) : "uncategorized";
+      const slice =
+        acc.get(key) ??
+        (cat
+          ? { name: cat.name, color: cat.color, minutes: 0 }
+          : { name: "Uncategorized", color: "var(--idle)", minutes: 0 });
+      slice.minutes += interval;
+      acc.set(key, slice);
+    });
+    return [...acc.values()].sort((a, b) => b.minutes - a.minutes);
+  }, [worked, catMap, interval]);
+
+  const pausedUntil = settings ? settings.paused_until * 1000 : 0;
+  const timerLabel = settings?.paused
+    ? "Timer paused"
+    : pausedUntil > Date.now()
+      ? `Paused until ${new Date(pausedUntil).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      : nextAt > 0
+        ? `Next check-in in ${countdownLabel(secondsUntil(nextAt))}`
+        : null;
 
   const now = new Date();
   const dateLabel = now.toLocaleDateString(undefined, {
@@ -65,8 +99,13 @@ export default function Dashboard() {
               ? "Nothing tracked yet today."
               : `Across ${worked.length} check-in${worked.length === 1 ? "" : "s"}`}
             {idleMin > 0 && ` · ${formatDuration(idleMin)} away`}
-            {settings?.paused && " · timer paused"}
           </p>
+          {timerLabel && (
+            <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-surface-2/80 px-3 py-1 text-[12px] font-medium text-muted">
+              <Timer className="size-3.5" />
+              {timerLabel}
+            </p>
+          )}
         </div>
 
         <ProgressRing value={ringValue}>
@@ -76,6 +115,29 @@ export default function Dashboard() {
           <div className="text-[11px] uppercase tracking-wider text-muted">of 8h</div>
         </ProgressRing>
       </header>
+
+      {todaySlices.length > 0 && (
+        <section className="mt-9">
+          <div className="flex h-2.5 gap-px overflow-hidden rounded-full">
+            {todaySlices.map((s) => (
+              <div
+                key={s.name}
+                title={`${s.name} — ${formatDuration(s.minutes)}`}
+                style={{ width: `${(s.minutes / workedMin) * 100}%`, backgroundColor: s.color }}
+              />
+            ))}
+          </div>
+          <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5">
+            {todaySlices.map((s) => (
+              <span key={s.name} className="flex items-center gap-1.5 text-[12px] text-muted">
+                <span className="size-2 rounded-full" style={{ backgroundColor: s.color }} />
+                {s.name}
+                <span className="tabular-nums">{formatDuration(s.minutes)}</span>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="mt-10">
         <h2 className="mb-3 px-1 text-[13px] font-semibold uppercase tracking-wider text-muted">

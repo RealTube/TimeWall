@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
-import { CalendarRange, Clock3, Pause, Play, Settings as SettingsIcon } from "lucide-react";
+import { ChartNoAxesColumn, Clock3, Pause, Play, Settings as SettingsIcon } from "lucide-react";
 import { api } from "../lib/api";
 import { cn } from "../lib/utils";
 
 const NAV = [
   { to: "/", label: "Today", icon: Clock3, end: true },
-  { to: "/history", label: "History", icon: CalendarRange, end: false },
+  { to: "/insights", label: "Insights", icon: ChartNoAxesColumn, end: false },
   { to: "/settings", label: "Settings", icon: SettingsIcon, end: false },
 ];
 
