@@ -1,8 +1,9 @@
 [package]
 name = "reality-check"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "1.0.0"
+description = "Hima — the automated time audit. Every interval it asks what you just did and shows where your time actually went, privately and encrypted on-device."
+authors = ["Gevor"]
+license = "MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -23,6 +24,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-log = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
@@ -33,4 +35,3 @@ base64 = "0.22"
 user-idle = "0.6"
 window-vibrancy = "0.6"
 log = "0.4"
-

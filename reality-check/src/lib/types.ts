@@ -21,12 +21,17 @@ export type ThemePreference = "light" | "dark" | "system";
 export interface AppSettings {
   interval_minutes: number;
   paused: boolean;
+  paused_until: number; // unix ts; 0 = no temporary pause
   idle_threshold_min: number;
   align_to_clock: boolean;
   theme: ThemePreference;
   notifications: boolean;
   sound: boolean;
   onboarded: boolean;
+  schedule_enabled: boolean;
+  schedule_start_min: number; // minutes from local midnight
+  schedule_end_min: number;
+  schedule_days: string; // CSV of ISO weekdays, Mon=1 … Sun=7
 }
 
 export interface DayTotal {
@@ -41,4 +46,24 @@ export interface CategorySlice {
   color: string;
   is_productive: boolean;
   minutes: number;
+}
+
+/** One heatmap cell; weekday 0 = Monday … 6 = Sunday. */
+export interface HeatCell {
+  weekday: number;
+  hour: number;
+  minutes: number;
+}
+
+export interface TopActivity {
+  activity: string;
+  minutes: number;
+  count: number;
+}
+
+export interface FocusStats {
+  avg_block_min: number;
+  longest_block_min: number;
+  switches_per_day: number;
+  days_counted: number;
 }

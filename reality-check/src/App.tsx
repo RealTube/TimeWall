@@ -3,7 +3,7 @@ import { HashRouter, Route, Routes } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { Layout } from "./components/Layout";
 import Dashboard from "./screens/Dashboard";
-import History from "./screens/History";
+import Insights from "./screens/Insights";
 import SettingsScreen from "./screens/Settings";
 import Prompt from "./screens/Prompt";
 import { useAppStore } from "./lib/store";
@@ -32,7 +32,7 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/history" element={<History />} />
+          <Route path="/insights" element={<Insights />} />
           <Route path="/settings" element={<SettingsScreen />} />
         </Route>
         <Route path="/prompt" element={<Prompt />} />

@@ -44,6 +44,7 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::log_activity,
             commands::get_todays_logs,
@@ -56,13 +57,20 @@ pub fn run() {
             commands::set_interval,
             commands::update_setting,
             commands::set_pause,
+            commands::pause_for,
             commands::snooze,
+            commands::get_next_prompt_at,
             commands::list_categories,
             commands::add_category,
             commands::update_category,
             commands::delete_category,
             commands::get_day_totals,
             commands::get_category_breakdown,
+            commands::get_hourly_heatmap,
+            commands::get_top_activities,
+            commands::get_focus_stats,
+            commands::export_csv,
+            commands::erase_all_entries,
             commands::set_autostart,
             commands::get_autostart,
         ])

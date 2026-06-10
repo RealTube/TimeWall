@@ -45,3 +45,49 @@ export function greeting(d = new Date()): string {
   if (h < 18) return "Good afternoon";
   return "Good evening";
 }
+
+/** Monday of the week containing `iso`. */
+export function startOfWeekISO(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`);
+  const offset = (d.getDay() + 6) % 7; // Monday = 0
+  d.setDate(d.getDate() - offset);
+  return todayISO(d);
+}
+
+/** First day of the month containing `iso`. */
+export function startOfMonthISO(iso: string): string {
+  return `${iso.slice(0, 7)}-01`;
+}
+
+/** Last day of the month containing `iso`. */
+export function endOfMonthISO(iso: string): string {
+  const d = new Date(`${startOfMonthISO(iso)}T00:00:00`);
+  d.setMonth(d.getMonth() + 1);
+  d.setDate(0);
+  return todayISO(d);
+}
+
+/** Shift `iso` by a whole number of months, clamped to the 1st. */
+export function shiftMonthISO(iso: string, months: number): string {
+  const d = new Date(`${startOfMonthISO(iso)}T00:00:00`);
+  d.setMonth(d.getMonth() + months);
+  return todayISO(d);
+}
+
+/** Minutes-from-midnight → "9:00 AM" style label in the user's locale. */
+export function minutesToTimeLabel(min: number): string {
+  const d = new Date();
+  d.setHours(Math.floor(min / 60), min % 60, 0, 0);
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** Seconds until a unix timestamp, never negative. */
+export function secondsUntil(ts: number, now = Date.now()): number {
+  return Math.max(0, ts - Math.floor(now / 1000));
+}
+
+/** Compact countdown: 95s → "2 min", 45s → "<1 min". */
+export function countdownLabel(secs: number): string {
+  if (secs < 60) return "<1 min";
+  return `${Math.ceil(secs / 60)} min`;
+}

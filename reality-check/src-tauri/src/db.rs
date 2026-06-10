@@ -59,6 +59,43 @@ pub struct CategorySlice {
     pub minutes: i64,
 }
 
+/// One cell of the time-of-day heatmap. `weekday` is 0 = Monday … 6 = Sunday.
+#[derive(Serialize)]
+pub struct HeatCell {
+    pub weekday: i64,
+    pub hour: i64,
+    pub minutes: i64,
+}
+
+/// A named activity ranked by total time over a range.
+#[derive(Serialize)]
+pub struct TopActivity {
+    pub activity: String,
+    pub minutes: i64,
+    pub count: i64,
+}
+
+/// Focus-fragmentation profile over a range. A "block" is a run of consecutive
+/// check-ins with the same activity text within one day; idle breaks a block.
+#[derive(Serialize)]
+pub struct FocusStats {
+    pub avg_block_min: f64,
+    pub longest_block_min: i64,
+    pub switches_per_day: f64,
+    pub days_counted: i64,
+}
+
+/// A decrypted row ready for CSV export (category resolved to its name).
+pub struct ExportRow {
+    pub date: String,
+    pub time: String,
+    pub activity: String,
+    pub category: String,
+    pub is_productive: bool,
+    pub was_idle: bool,
+    pub interval_min: i64,
+}
+
 /// Open (or create) the encrypted DB, set robust pragmas, and run migrations.
 pub fn open(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
@@ -150,6 +187,26 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
+    if version < 2 {
+        // 1.0: active schedule (work hours) + temporary pause. Times are
+        // minutes-from-midnight local; days are ISO weekday numbers (Mon=1).
+        for (k, v) in [
+            ("schedule_enabled", "0"),
+            ("schedule_start_min", "540"),
+            ("schedule_end_min", "1080"),
+            ("schedule_days", "1,2,3,4,5"),
+            ("paused_until", "0"),
+        ] {
+            conn.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)",
+                params![k, v],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        conn.pragma_update(None, "user_version", 2)
+            .map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 
@@ -198,7 +255,15 @@ pub fn insert_activity(
         "INSERT INTO activity_log
             (date, time, logged_at_ts, activity_enc, category_id, was_idle, interval_min)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![date, time, ts, enc, category_id, was_idle as i64, interval_min],
+        params![
+            date,
+            time,
+            ts,
+            enc,
+            category_id,
+            was_idle as i64,
+            interval_min
+        ],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -436,6 +501,227 @@ pub fn category_breakdown(
     Ok(out)
 }
 
+/// Worked minutes by (weekday, hour-of-day) — "when do I actually work?".
+/// SQLite's `%w` is 0 = Sunday; we re-base to 0 = Monday for the UI.
+pub fn hourly_heatmap(conn: &Connection, start: &str, end: &str) -> Result<Vec<HeatCell>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT CAST(strftime('%w', date) AS INTEGER) AS dow,
+                    CAST(substr(time, 1, 2) AS INTEGER) AS hour,
+                    SUM(interval_min) AS minutes
+             FROM activity_log
+             WHERE date BETWEEN ?1 AND ?2 AND was_idle = 0
+             GROUP BY dow, hour",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([start, end], |r| {
+            Ok(HeatCell {
+                weekday: (r.get::<_, i64>(0)? + 6) % 7,
+                hour: r.get(1)?,
+                minutes: r.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// Activities ranked by total time. Grouping is case/whitespace-insensitive;
+/// the first-seen spelling is kept for display.
+pub fn top_activities(
+    conn: &Connection,
+    crypto: &Crypto,
+    start: &str,
+    end: &str,
+    limit: usize,
+) -> Result<Vec<TopActivity>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT activity_enc, interval_min FROM activity_log
+             WHERE date BETWEEN ?1 AND ?2 AND was_idle = 0
+             ORDER BY logged_at_ts",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([start, end], |r| {
+            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+
+    // key (normalized) → (display text, minutes, count)
+    let mut acc: std::collections::HashMap<String, (String, i64, i64)> =
+        std::collections::HashMap::new();
+    for r in rows {
+        let (enc, interval) = r.map_err(|e| e.to_string())?;
+        let Ok(text) = crypto.decrypt(&enc) else {
+            continue;
+        };
+        let key = text.trim().to_lowercase();
+        let entry = acc
+            .entry(key)
+            .or_insert_with(|| (text.trim().to_string(), 0, 0));
+        entry.1 += interval;
+        entry.2 += 1;
+    }
+
+    let mut out: Vec<TopActivity> = acc
+        .into_values()
+        .map(|(activity, minutes, count)| TopActivity {
+            activity,
+            minutes,
+            count,
+        })
+        .collect();
+    out.sort_by(|a, b| b.minutes.cmp(&a.minutes).then(a.activity.cmp(&b.activity)));
+    out.truncate(limit);
+    Ok(out)
+}
+
+/// Walk the range's check-ins in order and measure focus blocks (see
+/// [`FocusStats`]). Days with no worked entries don't dilute the averages.
+pub fn focus_stats(
+    conn: &Connection,
+    crypto: &Crypto,
+    start: &str,
+    end: &str,
+) -> Result<FocusStats, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT date, activity_enc, was_idle, interval_min FROM activity_log
+             WHERE date BETWEEN ?1 AND ?2
+             ORDER BY date, logged_at_ts, id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([start, end], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, i64>(2)? != 0,
+                r.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut blocks: Vec<i64> = Vec::new();
+    let mut switches_total: i64 = 0;
+    let mut days: HashSet<String> = HashSet::new();
+
+    // (date, normalized activity) of the open block, plus its accumulated minutes.
+    let mut current: Option<(String, String)> = None;
+    let mut current_min: i64 = 0;
+    let close = |blocks: &mut Vec<i64>, current_min: &mut i64| {
+        if *current_min > 0 {
+            blocks.push(*current_min);
+            *current_min = 0;
+        }
+    };
+
+    for r in rows {
+        let (date, enc, was_idle, interval) = r.map_err(|e| e.to_string())?;
+        if was_idle {
+            close(&mut blocks, &mut current_min);
+            current = None;
+            continue;
+        }
+        let Ok(text) = crypto.decrypt(&enc) else {
+            continue;
+        };
+        days.insert(date.clone());
+        let key = text.trim().to_lowercase();
+        let continues = current
+            .as_ref()
+            .is_some_and(|(d, k)| *d == date && *k == key);
+        if continues {
+            current_min += interval;
+        } else {
+            // A new block; only a same-day change of activity is a "switch".
+            if current.as_ref().is_some_and(|(d, _)| *d == date) {
+                switches_total += 1;
+            }
+            close(&mut blocks, &mut current_min);
+            current = Some((date, key));
+            current_min = interval;
+        }
+    }
+    close(&mut blocks, &mut current_min);
+
+    let days_counted = days.len() as i64;
+    let total_min: i64 = blocks.iter().sum();
+    Ok(FocusStats {
+        avg_block_min: if blocks.is_empty() {
+            0.0
+        } else {
+            total_min as f64 / blocks.len() as f64
+        },
+        longest_block_min: blocks.iter().copied().max().unwrap_or(0),
+        switches_per_day: if days_counted == 0 {
+            0.0
+        } else {
+            switches_total as f64 / days_counted as f64
+        },
+        days_counted,
+    })
+}
+
+/// Decrypted, category-resolved rows for CSV export, oldest first.
+pub fn export_rows(
+    conn: &Connection,
+    crypto: &Crypto,
+    start: &str,
+    end: &str,
+) -> Result<Vec<ExportRow>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.date, a.time, a.activity_enc, a.was_idle, a.interval_min,
+                    COALESCE(c.name, ''), COALESCE(c.is_productive, 0)
+             FROM activity_log a
+             LEFT JOIN categories c ON a.category_id = c.id
+             WHERE a.date BETWEEN ?1 AND ?2
+             ORDER BY a.date, a.logged_at_ts, a.id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([start, end], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+                r.get::<_, i64>(3)? != 0,
+                r.get::<_, i64>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, i64>(6)? != 0,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    for r in rows {
+        let (date, time, enc, was_idle, interval_min, category, is_productive) =
+            r.map_err(|e| e.to_string())?;
+        out.push(ExportRow {
+            date,
+            time,
+            activity: crypto.decrypt(&enc).unwrap_or_else(|_| "—".to_string()),
+            category,
+            is_productive,
+            was_idle,
+            interval_min,
+        });
+    }
+    Ok(out)
+}
+
+/// Delete every log entry. Categories and settings survive (FR-6.2).
+pub fn erase_logs(conn: &Connection) -> Result<usize, String> {
+    conn.execute("DELETE FROM activity_log", [])
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,5 +758,92 @@ mod tests {
         assert_eq!(totals.len(), 1);
         assert_eq!(totals[0].worked_minutes, 15);
         assert_eq!(totals[0].idle_minutes, 15);
+    }
+
+    fn today() -> String {
+        Local::now().format("%Y-%m-%d").to_string()
+    }
+
+    #[test]
+    fn heatmap_counts_worked_minutes_only() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        insert_activity(&conn, &crypto, "work", None, false, 15).unwrap();
+        insert_activity(&conn, &crypto, "more work", None, false, 15).unwrap();
+        insert_activity(&conn, &crypto, IDLE_LABEL, None, true, 15).unwrap();
+        let cells = hourly_heatmap(&conn, &today(), &today()).unwrap();
+        let total: i64 = cells.iter().map(|c| c.minutes).sum();
+        assert_eq!(total, 30); // idle interval excluded
+        assert!(cells.iter().all(|c| (0..7).contains(&c.weekday)));
+        assert!(cells.iter().all(|c| (0..24).contains(&c.hour)));
+    }
+
+    #[test]
+    fn top_activities_group_case_insensitively_and_rank_by_time() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        insert_activity(&conn, &crypto, "Email", None, false, 15).unwrap();
+        insert_activity(&conn, &crypto, "email ", None, false, 15).unwrap();
+        insert_activity(&conn, &crypto, "Code", None, false, 15).unwrap();
+        let top = top_activities(&conn, &crypto, &today(), &today(), 10).unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].activity, "Email"); // first-seen spelling wins
+        assert_eq!(top[0].minutes, 30);
+        assert_eq!(top[0].count, 2);
+    }
+
+    #[test]
+    fn focus_stats_measure_blocks_switches_and_idle_breaks() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        for (text, idle) in [
+            ("spec", false),
+            ("spec", false),    // continues the block → 30-min block
+            ("email", false),   // switch #1
+            (IDLE_LABEL, true), // breaks the block, not a switch
+            ("email", false),   // new block after idle
+        ] {
+            insert_activity(&conn, &crypto, text, None, idle, 15).unwrap();
+        }
+        let s = focus_stats(&conn, &crypto, &today(), &today()).unwrap();
+        assert_eq!(s.longest_block_min, 30);
+        assert_eq!(s.days_counted, 1);
+        assert!((s.avg_block_min - 20.0).abs() < f64::EPSILON); // (30+15+15)/3
+        assert!((s.switches_per_day - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn export_rows_resolve_category_and_decrypt() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        let cats = list_categories(&conn).unwrap();
+        insert_activity(&conn, &crypto, "Wrote spec", Some(cats[0].id), false, 15).unwrap();
+        insert_activity(&conn, &crypto, IDLE_LABEL, None, true, 15).unwrap();
+        let rows = export_rows(&conn, &crypto, &today(), &today()).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].activity, "Wrote spec");
+        assert_eq!(rows[0].category, cats[0].name);
+        assert!(rows[0].is_productive);
+        assert!(rows[1].was_idle);
+        assert_eq!(rows[1].category, "");
+    }
+
+    #[test]
+    fn erase_logs_removes_entries_but_keeps_categories() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        insert_activity(&conn, &crypto, "work", None, false, 15).unwrap();
+        assert_eq!(erase_logs(&conn).unwrap(), 1);
+        assert!(logs_for_date(&conn, &crypto, &today()).unwrap().is_empty());
+        assert!(!list_categories(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_v2_seeds_schedule_defaults() {
+        let conn = mem();
+        assert_eq!(get_setting_or(&conn, "schedule_enabled", "x"), "0");
+        assert_eq!(get_setting_or(&conn, "schedule_start_min", "x"), "540");
+        assert_eq!(get_setting_or(&conn, "schedule_end_min", "x"), "1080");
+        assert_eq!(get_setting_or(&conn, "schedule_days", "x"), "1,2,3,4,5");
     }
 }
