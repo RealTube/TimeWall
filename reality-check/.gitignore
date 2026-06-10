@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local encrypted database + exports (never committed; lives in app data dir)
+*.db
+*.db-shm
+*.db-wal
+*.xlsx
