@@ -1,9 +1,9 @@
-import { HashRouter, Routes, Route } from "react-router-dom";
-import Prompt from "./Prompt";
-import Dashboard from "./Dashboard";
+import { HashRouter, Route, Routes } from "react-router-dom";
+import Dashboard from "./dashboard/Dashboard";
+import Prompt from "./prompt/Prompt";
 import "./App.css";
 
-function App() {
+export default function App() {
   return (
     <HashRouter>
       <Routes>
@@ -13,5 +13,3 @@ function App() {
     </HashRouter>
   );
 }
-
-export default App;
