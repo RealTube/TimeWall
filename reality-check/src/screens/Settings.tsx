@@ -10,6 +10,7 @@ import {
   shiftISO,
   startOfMonthISO,
   startOfWeekISO,
+  stepValue,
   todayISO,
 } from "../lib/utils";
 
@@ -72,6 +73,16 @@ export default function Settings() {
   const toggleSchedule = (on: boolean) => {
     patch({ schedule_enabled: on });
     api.updateSetting("schedule_enabled", on ? "1" : "0").catch(() => {});
+  };
+
+  const toggleNotifications = (on: boolean) => {
+    patch({ notifications: on });
+    api.updateSetting("notifications", on ? "1" : "0").catch(() => {});
+  };
+
+  const toggleSound = (on: boolean) => {
+    patch({ sound: on });
+    api.updateSetting("sound", on ? "1" : "0").catch(() => {});
   };
 
   const setScheduleTime = (key: "schedule_start_min" | "schedule_end_min", v: number) => {
@@ -163,6 +174,18 @@ export default function Settings() {
             </Row>
           </>
         )}
+      </Section>
+
+      <Section title="Alerts">
+        <Row
+          label="System notification"
+          hint="Also raise a notification when it's time to check in."
+        >
+          <Toggle checked={settings.notifications} onChange={toggleNotifications} />
+        </Row>
+        <Row label="Sound" hint="Play a soft chime when the prompt appears.">
+          <Toggle checked={settings.sound} onChange={toggleSound} />
+        </Row>
       </Section>
 
       <Section title="Appearance">
@@ -288,13 +311,13 @@ function Stepper({
 }) {
   return (
     <div className="flex items-center gap-1 rounded-xl bg-surface-2 p-1">
-      <StepBtn onClick={() => onChange(value - 1)}>
+      <StepBtn onClick={() => onChange(stepValue(value, -1))} aria-label="Decrease">
         <Minus className="size-4" />
       </StepBtn>
       <span className="w-16 text-center text-[15px] font-medium tabular-nums">
         {value} {unit}
       </span>
-      <StepBtn onClick={() => onChange(value + 1)}>
+      <StepBtn onClick={() => onChange(stepValue(value, 1))} aria-label="Increase">
         <Plus className="size-4" />
       </StepBtn>
     </div>
@@ -483,6 +506,7 @@ function CategoryRow({
   onChanged: () => void;
 }) {
   const [name, setName] = useState(category.name);
+  const [picking, setPicking] = useState(false);
 
   const commit = (next: Partial<Category>) => {
     const merged = { ...category, ...next, name: (next.name ?? name).trim() || category.name };
@@ -505,7 +529,33 @@ function CategoryRow({
 
   return (
     <div className="group flex items-center gap-3 rounded-xl px-3 py-2 hover:bg-surface-2/60">
-      <span className="size-3 rounded-full" style={{ backgroundColor: category.color }} />
+      <button
+        onClick={() => setPicking(!picking)}
+        title="Change color"
+        aria-label={`Change color of ${category.name}`}
+        className="grid size-6 shrink-0 place-items-center rounded-md transition-colors hover:bg-surface-2"
+      >
+        <span className="size-3 rounded-full" style={{ backgroundColor: category.color }} />
+      </button>
+      {picking && (
+        <div className="flex shrink-0 gap-1.5">
+          {PALETTE.map((c) => (
+            <button
+              key={c}
+              aria-label={`Use ${c}`}
+              onClick={() => {
+                setPicking(false);
+                if (c !== category.color) commit({ color: c });
+              }}
+              className={cn(
+                "size-4 rounded-full transition-transform hover:scale-110",
+                c === category.color && "ring-2 ring-fg/40 ring-offset-2 ring-offset-surface",
+              )}
+              style={{ backgroundColor: c }}
+            />
+          ))}
+        </div>
+      )}
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}

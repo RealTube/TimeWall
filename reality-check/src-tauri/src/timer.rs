@@ -170,7 +170,20 @@ fn tick(app: &AppHandle) {
         return;
     }
 
-    // Outside working hours Hima stays silent and records nothing (FR-2.5).
+    // Is the previous ask still on screen? Then it went unanswered for a
+    // whole interval and must be accounted for, not silently replaced.
+    let prompt_win = app.get_webview_window("prompt");
+    let prompt_visible = prompt_win
+        .as_ref()
+        .is_some_and(|w| w.is_visible().unwrap_or(false));
+    let hide_prompt = || {
+        if let Some(w) = &prompt_win {
+            let _ = w.hide();
+        }
+    };
+
+    // Outside working hours Hima stays silent and records nothing (FR-2.5) —
+    // and doesn't strand a stale always-on-top card past the end of the day.
     let local = Local::now();
     let (s_enabled, s_days, s_start, s_end) = schedule;
     if !within_schedule(
@@ -181,18 +194,41 @@ fn tick(app: &AppHandle) {
         local.weekday().number_from_monday(),
         i64::from(local.hour()) * 60 + i64::from(local.minute()),
     ) {
+        if prompt_visible {
+            hide_prompt();
+        }
         return;
     }
 
     // Idle check is fail-safe: any error is treated as "active" so we still prompt.
     let idle_secs = current_idle_secs();
     if idle_secs >= idle_threshold_min * 60 {
+        if prompt_visible {
+            hide_prompt(); // the user left without answering; away covers it
+        }
         if let Ok(conn) = state.conn.lock() {
             let _ = db::insert_activity(&conn, &state.crypto, IDLE_LABEL, None, true, interval_min);
         }
         let _ = app.emit("refresh-dashboard", ());
         log::info!("interval marked idle ({idle_secs}s away)");
         return;
+    }
+
+    // Present but never answered: record the interval as missed (ESM honesty —
+    // a gap is shown as a gap), then ask again for the new interval.
+    if prompt_visible {
+        if let Ok(conn) = state.conn.lock() {
+            let _ = db::insert_activity(
+                &conn,
+                &state.crypto,
+                db::MISSED_LABEL,
+                None,
+                true,
+                interval_min,
+            );
+        }
+        let _ = app.emit("refresh-dashboard", ());
+        log::info!("interval marked missed (prompt unanswered)");
     }
 
     surface_prompt(app);

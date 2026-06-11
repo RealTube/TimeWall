@@ -23,6 +23,7 @@ const categories: Category[] = [
 ];
 
 const logs: ActivityLog[] = [
+  { id: 10, time: "14:45:00", activity: "Missed check-in", category_id: null, was_idle: true, interval_min: 15 },
   { id: 9, time: "14:30:00", activity: "Outreach emails", category_id: 3, was_idle: false, interval_min: 15 },
   { id: 8, time: "14:15:00", activity: "Outreach emails", category_id: 3, was_idle: false, interval_min: 15 },
   { id: 7, time: "14:00:00", activity: "Reviewed Q3 numbers", category_id: 4, was_idle: false, interval_min: 15 },

@@ -12,8 +12,26 @@ import {
   signedDuration,
   startOfMonthISO,
   startOfWeekISO,
+  stepValue,
   todayISO,
 } from "./utils";
+
+describe("stepValue", () => {
+  it("steps by 5 above 5 minutes, snapping to multiples", () => {
+    expect(stepValue(15, 1)).toBe(20);
+    expect(stepValue(15, -1)).toBe(10);
+    expect(stepValue(17, 1)).toBe(20);
+    expect(stepValue(17, -1)).toBe(15);
+    expect(stepValue(6, -1)).toBe(5);
+  });
+
+  it("steps by 1 in the fine 1–5 range", () => {
+    expect(stepValue(5, -1)).toBe(4);
+    expect(stepValue(4, 1)).toBe(5);
+    expect(stepValue(5, 1)).toBe(10);
+    expect(stepValue(1, 1)).toBe(2);
+  });
+});
 
 describe("formatDuration", () => {
   it("formats minutes, hours, and mixes", () => {

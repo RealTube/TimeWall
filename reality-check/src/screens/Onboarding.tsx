@@ -26,6 +26,9 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
       console.error("onboarding save failed", e);
     }
     onDone();
+    // Ask right away — the first check-in shouldn't be 15 minutes out.
+    // ("Set up Hima" makes a fine first entry.)
+    api.checkInNow().catch(() => {});
   };
 
   return (

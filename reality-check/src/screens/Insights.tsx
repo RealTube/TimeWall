@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -7,7 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   FileDown,
-  MoonStar,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type {
@@ -24,7 +24,6 @@ import {
   cn,
   endOfMonthISO,
   formatDuration,
-  hhmm,
   hoursDecimal,
   lastNWeeks,
   shiftISO,
@@ -34,6 +33,7 @@ import {
   startOfWeekISO,
   todayISO,
 } from "../lib/utils";
+import { LogRow } from "../components/LogRow";
 import { ProgressRing } from "../components/ui/ProgressRing";
 
 type Period = "week" | "month";
@@ -70,7 +70,7 @@ export default function Insights() {
   const prevEnd =
     period === "week" ? shiftISO(start, -1) : endOfMonthISO(shiftMonthISO(start, -1));
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api.dayTotals(start, end).then(setDays).catch(() => {});
     api.categoryBreakdown(start, end).then(setCats).catch(() => {});
     api.hourlyHeatmap(start, end).then(setHeat).catch(() => {});
@@ -78,9 +78,22 @@ export default function Insights() {
     api.focusStats(start, end).then(setFocus).catch(() => {});
     api.dayTotals(prevStart, prevEnd).then(setPrevDays).catch(() => {});
     api.topActivities(prevStart, prevEnd, 50).then(setPrevTop).catch(() => {});
+  }, [start, end, prevStart, prevEnd]);
+
+  useEffect(() => {
+    load();
     // Keep a selection that still belongs to the new range (e.g. a search jump).
     setSelectedDay((d) => (d && d >= start && d <= end ? d : null));
-  }, [start, end, prevStart, prevEnd]);
+  }, [load, start, end]);
+
+  // Keep the charts live while edits happen (e.g. categorizing in the
+  // drill-down below, or a check-in logged while this view is open).
+  useEffect(() => {
+    const un = listen("refresh-dashboard", load);
+    return () => {
+      un.then((f) => f());
+    };
+  }, [load]);
 
   // Once per visit: streaks, category targets, and the 8-week trend.
   useEffect(() => {
@@ -158,6 +171,10 @@ export default function Insights() {
   // never to NaN on screen.
   const productiveMin = allDays.reduce((a, d) => a + (d.productive_minutes ?? 0), 0);
   const productiveRatio = workedTotal > 0 ? productiveMin / workedTotal : 0;
+  // When a lot of time is uncategorized, the productive % is an undercount —
+  // say so instead of letting the ring quietly read as busywork.
+  const uncatMin = cats.find((c) => c.category_id === null)?.minutes ?? 0;
+  const uncatRatio = workedTotal > 0 ? uncatMin / workedTotal : 0;
   const prevWorked = prevDays.reduce((a, d) => a + d.worked_minutes, 0);
   const prevProductive = prevDays.reduce((a, d) => a + (d.productive_minutes ?? 0), 0);
 
@@ -261,8 +278,13 @@ export default function Insights() {
           <p className="mt-2 max-w-xs text-[15px] text-muted">
             {workedTotal === 0
               ? `No check-ins logged this ${period} yet.`
-              : `${Math.round(productiveRatio * 100)}% of it was productive work` +
-                (idleTotal > 0 ? ` · ${formatDuration(idleTotal)} away from your desk.` : ".")}
+              : [
+                  `${Math.round(productiveRatio * 100)}% of it was productive work`,
+                  ...(uncatRatio >= 0.25
+                    ? [`${Math.round(uncatRatio * 100)}% uncategorized`]
+                    : []),
+                  ...(idleTotal > 0 ? [`${formatDuration(idleTotal)} away from your desk`] : []),
+                ].join(" · ") + "."}
           </p>
           <CompareLine
             period={period}
@@ -493,20 +515,19 @@ function DayBars({
 
 // --- Day drill-down ----------------------------------------------------------
 
+/** A past day's full journal — fully editable, because the audit's review
+ *  step ("categorize and cut") happens here, days after the entries were
+ *  logged. Edits ripple back into the charts via `refresh-dashboard`. */
 function DayDetail({ date }: { date: string }) {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api.logsForDate(date).then(setLogs).catch(() => {});
     api.categories().then(setCategories).catch(() => {});
   }, [date]);
 
-  const catMap = useMemo(() => {
-    const m = new Map<number, Category>();
-    categories.forEach((c) => m.set(c.id, c));
-    return m;
-  }, [categories]);
+  useEffect(load, [load]);
 
   const label = new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
     weekday: "long",
@@ -515,34 +536,14 @@ function DayDetail({ date }: { date: string }) {
   });
 
   return (
-    <Card title={label}>
+    <Card title={label} hint="Edit an entry to fix its text or category.">
       {logs.length === 0 ? (
         <Empty>No check-ins were logged this day.</Empty>
       ) : (
-        <ul className="-mx-2 divide-y divide-border">
-          {logs.map((log) => {
-            const cat = log.category_id ? catMap.get(log.category_id) : undefined;
-            return (
-              <li key={log.id} className="flex items-center gap-4 px-2 py-2.5">
-                <span className="w-12 shrink-0 font-mono text-[13px] tabular-nums text-muted">
-                  {hhmm(log.time)}
-                </span>
-                <span
-                  className="size-2.5 shrink-0 rounded-full"
-                  style={{
-                    backgroundColor: log.was_idle ? "var(--idle)" : cat?.color ?? "var(--border)",
-                  }}
-                />
-                <span className={cn("flex-1 truncate text-[15px]", log.was_idle && "text-muted")}>
-                  {log.activity}
-                  {log.was_idle && (
-                    <MoonStar className="ml-2 inline size-3.5 -translate-y-px text-idle" />
-                  )}
-                </span>
-                {cat && <span className="shrink-0 text-[12px] text-muted">{cat.name}</span>}
-              </li>
-            );
-          })}
+        <ul className="-mx-5 divide-y divide-border">
+          {logs.map((log) => (
+            <LogRow key={log.id} log={log} categories={categories} onChanged={load} />
+          ))}
         </ul>
       )}
     </Card>

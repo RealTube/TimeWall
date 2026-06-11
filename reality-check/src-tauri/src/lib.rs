@@ -59,6 +59,7 @@ pub fn run() {
             commands::set_pause,
             commands::pause_for,
             commands::snooze,
+            commands::check_in_now,
             commands::get_next_prompt_at,
             commands::list_categories,
             commands::add_category,

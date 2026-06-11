@@ -296,6 +296,14 @@ pub fn pause_for(app: AppHandle, state: State<AppState>, minutes: i64) -> Result
     Ok(())
 }
 
+/// Surface the check-in card on demand (the dashboard's "Check in now").
+/// The schedule is untouched — the next timed prompt still fires as armed.
+#[tauri::command]
+pub fn check_in_now(app: AppHandle) -> Result<(), String> {
+    crate::timer::surface_prompt(&app);
+    Ok(())
+}
+
 /// Unix timestamp of the next scheduled prompt, or 0 when paused — powers the
 /// dashboard's "next check-in" indicator.
 #[tauri::command]

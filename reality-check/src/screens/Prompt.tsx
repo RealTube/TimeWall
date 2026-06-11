@@ -17,10 +17,17 @@ export default function Prompt() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const focus = () => requestAnimationFrame(() => inputRef.current?.focus());
+  const soundOn = useRef(true);
 
   const refreshData = useCallback(() => {
     api.recent(6).then(setRecent).catch(() => {});
     api.categories().then(setCategories).catch(() => {});
+    api
+      .settings()
+      .then((s) => {
+        soundOn.current = s.sound;
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -29,10 +36,11 @@ export default function Prompt() {
     focus();
     const clockTimer = window.setInterval(() => setClock(new Date()), 20_000);
     const un = listen("time-to-log", () => {
-      setActivity("");
-      setCategoryId(null);
+      // An unsubmitted draft survives the re-show — the user may have been
+      // typing the moment the next interval fired.
       setShownAt(Date.now());
       setClock(new Date());
+      if (soundOn.current) chime();
       refreshData();
       focus();
     });
@@ -159,4 +167,32 @@ export default function Prompt() {
       </AnimatePresence>
     </div>
   );
+}
+
+/** A soft two-note cue (A5 → E6), synthesized so no audio asset ships.
+ *  Best-effort: if the webview blocks audio, the system notification's own
+ *  sound still covers the alert. */
+function chime() {
+  try {
+    const ctx = new AudioContext();
+    void ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime;
+    const note = (freq: number, at: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, t0 + at);
+      gain.gain.linearRampToValueAtTime(0.07, t0 + at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.45);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0 + at);
+      osc.stop(t0 + at + 0.5);
+    };
+    note(880, 0);
+    note(1318.5, 0.14);
+    window.setTimeout(() => void ctx.close().catch(() => {}), 900);
+  } catch {
+    // No audio device / blocked autoplay — stay silent.
+  }
 }

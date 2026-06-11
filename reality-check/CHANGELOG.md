@@ -27,18 +27,35 @@ Scoped in [PRD §11](docs/PRD.md#11-hima-11--the-ritual).
 - **Markdown report** — save any visible period (totals, days, top
   activities, focus, categories) via a native save dialog, for coaches and
   accountability partners.
-- **Check in anytime** — "Check in now" in the tray (re-arms the schedule) and
-  a quick-log composer on the dashboard timeline.
+- **Check in anytime** — "Check in now" in the tray and on the dashboard, plus
+  a quick-log composer on the dashboard timeline. The first check-in fires
+  right after onboarding instead of 15 minutes later.
 - **Gentle weekly targets** — optional hours-per-week per category, set inline
   in Settings; week view shows a quiet tick and "6h of 10h". Never red, never
   notifies.
 - Design system: keyboard-only focus rings, `prefers-reduced-motion` support,
   accent caret, ambient header light, search-highlight styling.
+- **Missed check-ins recorded** — an unanswered prompt logs a "Missed
+  check-in" row (excluded from worked time) instead of silently vanishing;
+  stale prompt cards are hidden when you go idle or the schedule ends.
+- **Post-hoc categorization** — every journal row (today and past-day
+  drill-down) edits text *and* category, so the review step no longer
+  depends on the 3-second prompt.
+- **Reclaim away/missed intervals** — idle rows are editable; editing one
+  clears the idle flag ("I was reading, not away").
+- **Alerts settings** — system-notification toggle surfaced; the sound
+  setting now drives a soft synthesized chime when the prompt appears.
+- **Category recolor** — click a category's dot in Settings to change its
+  color.
 
 ### Changed
 - Day totals now carry productive minutes, so the hero ring, trend, and
   report all share one definition of "productive".
 - Database schema migrated to v3 (additive; existing data is preserved).
+- Settings steppers move in 5-minute increments above 5 minutes.
+- Insights refreshes live while edits happen, and calls out when ≥25% of
+  worked time is uncategorized (the productive % would be an undercount).
+- An unsubmitted prompt draft survives the next interval's re-show.
 
 ## [1.0.0] — 2026-06-10
 

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { motion } from "framer-motion";
-import { Check, CornerDownLeft, MoonStar, Pencil, Plus, Timer, Trash2, X } from "lucide-react";
+import { BellRing, CornerDownLeft, Plus, Timer } from "lucide-react";
 import { api } from "../lib/api";
 import type { ActivityLog, AppSettings, Category } from "../lib/types";
-import { cn, countdownLabel, formatDuration, greeting, hhmm, secondsUntil } from "../lib/utils";
+import { countdownLabel, formatDuration, greeting, MISSED_LABEL, secondsUntil } from "../lib/utils";
+import { LogRow } from "../components/LogRow";
 import { ProgressRing } from "../components/ui/ProgressRing";
 
 const WORKDAY_MIN = 8 * 60;
@@ -46,10 +46,10 @@ export default function Dashboard() {
   const worked = logs.filter((l) => !l.was_idle);
   // Sum what each entry actually covered when it was logged — changing the
   // interval setting must never rewrite today's totals.
-  const workedMin = worked.reduce((a, l) => a + (l.interval_min ?? interval), 0);
-  const idleMin = logs
-    .filter((l) => l.was_idle)
-    .reduce((a, l) => a + (l.interval_min ?? interval), 0);
+  const sumMin = (xs: ActivityLog[]) => xs.reduce((a, l) => a + (l.interval_min ?? interval), 0);
+  const workedMin = sumMin(worked);
+  const missedMin = sumMin(logs.filter((l) => l.was_idle && l.activity === MISSED_LABEL));
+  const awayMin = sumMin(logs.filter((l) => l.was_idle && l.activity !== MISSED_LABEL));
   const ringValue = Math.min(1, workedMin / WORKDAY_MIN);
   const animatedHours = useCountUp(workedMin / 60);
 
@@ -101,14 +101,24 @@ export default function Dashboard() {
             {worked.length === 0
               ? "Nothing tracked yet today."
               : `Across ${worked.length} check-in${worked.length === 1 ? "" : "s"}`}
-            {idleMin > 0 && ` · ${formatDuration(idleMin)} away`}
+            {awayMin > 0 && ` · ${formatDuration(awayMin)} away`}
+            {missedMin > 0 && ` · ${formatDuration(missedMin)} unanswered`}
           </p>
-          {timerLabel && (
-            <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-surface-2/80 px-3 py-1 text-[12px] font-medium text-muted">
-              <Timer className="size-3.5" />
-              {timerLabel}
-            </p>
-          )}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {timerLabel && (
+              <p className="inline-flex items-center gap-1.5 rounded-full bg-surface-2/80 px-3 py-1 text-[12px] font-medium text-muted">
+                <Timer className="size-3.5" />
+                {timerLabel}
+              </p>
+            )}
+            <button
+              onClick={() => api.checkInNow().catch(() => {})}
+              className="inline-flex items-center gap-1.5 rounded-full bg-surface-2/80 px-3 py-1 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+            >
+              <BellRing className="size-3.5" />
+              Check in now
+            </button>
+          </div>
         </div>
 
         <ProgressRing value={ringValue}>
@@ -155,12 +165,7 @@ export default function Dashboard() {
           ) : (
             <ul className="divide-y divide-border">
               {logs.map((log) => (
-                <LogRow
-                  key={log.id}
-                  log={log}
-                  category={log.category_id ? catMap.get(log.category_id) : undefined}
-                  onChanged={load}
-                />
+                <LogRow key={log.id} log={log} categories={categories} onChanged={load} />
               ))}
             </ul>
           )}
@@ -216,141 +221,6 @@ function QuickLog({ onLogged }: { onLogged: () => void }) {
         </kbd>
       )}
     </form>
-  );
-}
-
-function LogRow({
-  log,
-  category,
-  onChanged,
-}: {
-  log: ActivityLog;
-  category?: Category;
-  onChanged: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(log.activity);
-  const [removing, setRemoving] = useState(false);
-
-  const save = async () => {
-    const value = draft.trim();
-    if (!value) return;
-    try {
-      await api.updateActivity(log.id, value, log.category_id);
-      setEditing(false);
-      onChanged();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const remove = async () => {
-    setRemoving(true);
-    try {
-      await api.deleteActivity(log.id);
-      onChanged();
-    } catch (e) {
-      console.error(e);
-      setRemoving(false);
-    }
-  };
-
-  return (
-    <motion.li
-      layout
-      animate={{ opacity: removing ? 0 : 1, height: removing ? 0 : "auto" }}
-      className="group flex items-center gap-4 px-5 py-3.5"
-    >
-      <span className="w-12 shrink-0 font-mono text-[13px] tabular-nums text-muted">
-        {hhmm(log.time)}
-      </span>
-
-      <span
-        className="size-2.5 shrink-0 rounded-full"
-        style={{ backgroundColor: log.was_idle ? "var(--idle)" : category?.color ?? "var(--border)" }}
-        title={category?.name}
-      />
-
-      {editing ? (
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") save();
-            if (e.key === "Escape") {
-              setDraft(log.activity);
-              setEditing(false);
-            }
-          }}
-          className="flex-1 rounded-md bg-surface-2 px-2 py-1 text-[15px] focus:outline-none focus:ring-2 focus:ring-accent/40"
-        />
-      ) : (
-        <span
-          className={cn(
-            "flex-1 truncate text-[15px]",
-            log.was_idle && "text-muted",
-          )}
-        >
-          {log.activity}
-          {log.was_idle && (
-            <MoonStar className="ml-2 inline size-3.5 -translate-y-px text-idle" />
-          )}
-        </span>
-      )}
-
-      {category && !editing && (
-        <span className="hidden shrink-0 text-[12px] text-muted sm:block">{category.name}</span>
-      )}
-
-      {!log.was_idle && (
-        <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-          {editing ? (
-            <>
-              <IconBtn onClick={save} title="Save">
-                <Check className="size-4" />
-              </IconBtn>
-              <IconBtn
-                onClick={() => {
-                  setDraft(log.activity);
-                  setEditing(false);
-                }}
-                title="Cancel"
-              >
-                <X className="size-4" />
-              </IconBtn>
-            </>
-          ) : (
-            <>
-              <IconBtn onClick={() => setEditing(true)} title="Edit">
-                <Pencil className="size-4" />
-              </IconBtn>
-              <IconBtn onClick={remove} title="Delete" danger>
-                <Trash2 className="size-4" />
-              </IconBtn>
-            </>
-          )}
-        </div>
-      )}
-    </motion.li>
-  );
-}
-
-function IconBtn({
-  children,
-  danger,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }) {
-  return (
-    <button
-      className={cn(
-        "grid size-8 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2",
-        danger ? "hover:text-red-500" : "hover:text-fg",
-      )}
-      {...props}
-    >
-      {children}
-    </button>
   );
 }
 

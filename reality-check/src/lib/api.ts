@@ -48,6 +48,7 @@ export const api = {
   setPause: (paused: boolean) => call<void>("set_pause", { paused }),
   pauseFor: (minutes: number) => call<void>("pause_for", { minutes }),
   snooze: (minutes = 5) => call<void>("snooze", { minutes }),
+  checkInNow: () => call<void>("check_in_now"),
   nextPromptAt: () => call<number>("get_next_prompt_at"),
 
   // Categories

@@ -6,6 +6,9 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
 
+/** Mirrors `db::MISSED_LABEL` — recorded when a prompt goes unanswered. */
+export const MISSED_LABEL = "Missed check-in";
+
 /** "14:32:07" → "14:32" */
 export function hhmm(time: string): string {
   return time.slice(0, 5);
@@ -96,6 +99,15 @@ export function minutesToTimeLabel(min: number): string {
   const d = new Date();
   d.setHours(Math.floor(min / 60), min % 60, 0, 0);
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** Step a minutes value for a stepper control: by 1 below 5 minutes, by 5
+ *  (snapped to the nearest multiple) above — 240 should not take 240 clicks. */
+export function stepValue(value: number, dir: 1 | -1): number {
+  if (dir > 0) {
+    return value >= 5 ? Math.ceil((value + 1) / 5) * 5 : value + 1;
+  }
+  return value > 5 ? Math.floor((value - 1) / 5) * 5 : value - 1;
 }
 
 /** Seconds until a unix timestamp, never negative. */

@@ -25,6 +25,11 @@ pub struct AppState {
 /// Label recorded for an interval the user was away from the desk.
 pub const IDLE_LABEL: &str = "Away from desk";
 
+/// Label recorded when a prompt went unanswered for a whole interval — the
+/// user was present (not idle) but never logged. Recorded instead of silently
+/// dropping the interval so totals stay honest; excluded from worked time.
+pub const MISSED_LABEL: &str = "Missed check-in";
+
 #[derive(Serialize)]
 pub struct ActivityLog {
     pub id: i64,
@@ -518,6 +523,9 @@ pub fn streaks_from_dates(dates_desc: &[String], today: &str) -> Streaks {
     }
 }
 
+/// An edit is a user's explicit claim about the interval, so it also clears
+/// the idle flag — editing an "Away from desk" / "Missed check-in" row
+/// reclaims it as real work (idle detection can't see reading or thinking).
 pub fn update_activity(
     conn: &Connection,
     crypto: &Crypto,
@@ -527,7 +535,7 @@ pub fn update_activity(
 ) -> Result<(), String> {
     let enc = crypto.encrypt(activity)?;
     conn.execute(
-        "UPDATE activity_log SET activity_enc = ?1, category_id = ?2 WHERE id = ?3",
+        "UPDATE activity_log SET activity_enc = ?1, category_id = ?2, was_idle = 0 WHERE id = ?3",
         params![enc, category_id, id],
     )
     .map_err(|e| e.to_string())?;
@@ -955,6 +963,21 @@ mod tests {
 
     fn today() -> String {
         Local::now().format("%Y-%m-%d").to_string()
+    }
+
+    #[test]
+    fn editing_an_idle_row_reclaims_it_as_work() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        insert_activity(&conn, &crypto, MISSED_LABEL, None, true, 15).unwrap();
+        let id = conn.last_insert_rowid();
+        update_activity(&conn, &crypto, id, "client call", None).unwrap();
+        let logs = logs_for_date(&conn, &crypto, &today()).unwrap();
+        assert_eq!(logs[0].activity, "client call");
+        assert!(!logs[0].was_idle);
+        let totals = day_totals(&conn, &today(), &today()).unwrap();
+        assert_eq!(totals[0].worked_minutes, 15);
+        assert_eq!(totals[0].idle_minutes, 0);
     }
 
     #[test]
