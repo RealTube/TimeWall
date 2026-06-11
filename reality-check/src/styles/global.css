@@ -78,6 +78,15 @@
     text-rendering: optimizeLegibility;
     overflow: hidden;
   }
+  /* A quiet wash of accent light at the top of the dashboard — ambience,
+     not decoration. The prompt window stays out (it must be transparent). */
+  html:not(.prompt) body {
+    background-image: radial-gradient(
+      1100px 460px at 72% -12%,
+      color-mix(in srgb, var(--accent) 6%, transparent),
+      transparent 70%
+    );
+  }
   /* The prompt window is transparent so the OS material shows through. */
   html.prompt,
   html.prompt body,
@@ -86,6 +95,34 @@
   }
   ::selection {
     background: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  input,
+  textarea {
+    caret-color: var(--accent);
+  }
+  /* Visible, branded focus for keyboard users only — pointer users keep the
+     clean chrome (NFR-6). */
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  /* Search-match highlight: a tint, not a highlighter. */
+  mark {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+    color: inherit;
+    border-radius: 3px;
+    padding: 0 1px;
+  }
+  /* Calm software respects calm settings. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
   * {
     scrollbar-width: thin;

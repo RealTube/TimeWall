@@ -33,8 +33,16 @@ browsing. It only ever stores the words you type.
 4. **The reality check.** The Insights view shows your week or month: daily
    bars (click any day to read its full journal), the time-of-day heatmap,
    top activities, focus profile, and the productive-vs-busywork split.
-5. **It's your data.** Export any range to CSV (opens cleanly in Excel,
-   Numbers, or Google Sheets) — or erase everything with two clicks.
+5. **The weekly ritual.** Every period is compared to the last one, an
+   8-week trend shows your direction, and "Where the time moved" names the
+   activities that grew and shrank. Your audit streak is right in the hero.
+6. **Zero-effort categories.** Tag "standup" as Meetings once — every later
+   "standup" categorizes itself. Optional weekly targets per category show as
+   a quiet tick, never an alarm.
+7. **Total recall.** `Ctrl/⌘ K` searches every word you've ever logged,
+   on-device, and jumps to that day's journal.
+8. **It's your data.** Export any range to CSV, save a Markdown report of any
+   week or month for a coach — or erase everything with two clicks.
 
 ## Install
 

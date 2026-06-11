@@ -32,6 +32,10 @@ pub struct ActivityLog {
     pub activity: String,
     pub category_id: Option<i64>,
     pub was_idle: bool,
+    /// Minutes this entry covered *when it was logged* — totals must use this,
+    /// never the current interval setting, so changing the interval can't
+    /// rewrite history.
+    pub interval_min: i64,
 }
 
 #[derive(Serialize, Clone)]
@@ -41,6 +45,8 @@ pub struct Category {
     pub color: String,
     pub is_productive: bool,
     pub sort_order: i64,
+    /// Optional weekly target in minutes; 0 = no target (FR-16).
+    pub weekly_target_min: i64,
 }
 
 #[derive(Serialize)]
@@ -48,6 +54,9 @@ pub struct DayTotal {
     pub date: String,
     pub worked_minutes: i64,
     pub idle_minutes: i64,
+    /// Worked minutes in categories flagged productive (uncategorized counts
+    /// as not productive, consistent with `category_breakdown`).
+    pub productive_minutes: i64,
 }
 
 #[derive(Serialize)]
@@ -83,6 +92,25 @@ pub struct FocusStats {
     pub longest_block_min: i64,
     pub switches_per_day: f64,
     pub days_counted: i64,
+}
+
+/// A journal entry matched by [`search_entries`] (FR-15).
+#[derive(Serialize)]
+pub struct SearchHit {
+    pub id: i64,
+    pub date: String,
+    pub time: String,
+    pub activity: String,
+    pub category_id: Option<i64>,
+}
+
+/// Consecutive-logged-day streaks (FR-13). A day counts when it has at least
+/// one non-away check-in.
+#[derive(Serialize)]
+pub struct Streaks {
+    pub current: i64,
+    pub best: i64,
+    pub days_logged: i64,
 }
 
 /// A decrypted row ready for CSV export (category resolved to its name).
@@ -207,6 +235,16 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
+    if version < 3 {
+        // 1.1: optional gentle weekly target per category, in minutes (FR-16).
+        conn.execute_batch(
+            "ALTER TABLE categories ADD COLUMN weekly_target_min INTEGER NOT NULL DEFAULT 0;",
+        )
+        .map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "user_version", 3)
+            .map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 
@@ -276,7 +314,7 @@ pub fn logs_for_date(
 ) -> Result<Vec<ActivityLog>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, time, activity_enc, category_id, was_idle
+            "SELECT id, time, activity_enc, category_id, was_idle, interval_min
              FROM activity_log WHERE date = ?1
              ORDER BY logged_at_ts DESC, id DESC",
         )
@@ -290,13 +328,14 @@ pub fn logs_for_date(
                 row.get::<_, Vec<u8>>(2)?,
                 row.get::<_, Option<i64>>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         })
         .map_err(|e| e.to_string())?;
 
     let mut out = Vec::new();
     for r in rows {
-        let (id, time, enc, category_id, was_idle) = r.map_err(|e| e.to_string())?;
+        let (id, time, enc, category_id, was_idle, interval_min) = r.map_err(|e| e.to_string())?;
         let activity = crypto.decrypt(&enc).unwrap_or_else(|_| "—".to_string());
         out.push(ActivityLog {
             id,
@@ -304,6 +343,7 @@ pub fn logs_for_date(
             activity,
             category_id,
             was_idle: was_idle != 0,
+            interval_min,
         });
     }
     Ok(out)
@@ -341,6 +381,143 @@ pub fn recent_activities(
     Ok(out)
 }
 
+/// The category the user most recently assigned to this exact text (FR-11).
+/// Case- and whitespace-insensitive; scans recent categorized entries only,
+/// newest first, so the lookup stays O(recent history) — and a deliberate
+/// re-categorization immediately becomes the new memory.
+pub fn last_category_for(
+    conn: &Connection,
+    crypto: &Crypto,
+    activity: &str,
+) -> Result<Option<i64>, String> {
+    let needle = activity.trim().to_lowercase();
+    let mut stmt = conn
+        .prepare(
+            "SELECT activity_enc, category_id FROM activity_log
+             WHERE was_idle = 0 AND category_id IS NOT NULL
+             ORDER BY logged_at_ts DESC, id DESC LIMIT 400",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| e.to_string())?;
+    for r in rows {
+        let (enc, category_id) = r.map_err(|e| e.to_string())?;
+        if let Ok(text) = crypto.decrypt(&enc) {
+            if text.trim().to_lowercase() == needle {
+                return Ok(Some(category_id));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Case-insensitive substring search over the decrypted journal, newest first
+/// (FR-15). The query lives only in memory; away markers are excluded — search
+/// is about the user's own words.
+pub fn search_entries(
+    conn: &Connection,
+    crypto: &Crypto,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchHit>, String> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, date, time, activity_enc, category_id FROM activity_log
+             WHERE was_idle = 0
+             ORDER BY logged_at_ts DESC, id DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    for r in rows {
+        let (id, date, time, enc, category_id) = r.map_err(|e| e.to_string())?;
+        let Ok(activity) = crypto.decrypt(&enc) else {
+            continue;
+        };
+        if activity.to_lowercase().contains(&needle) {
+            out.push(SearchHit {
+                id,
+                date,
+                time,
+                activity,
+                category_id,
+            });
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Distinct local dates with at least one non-away check-in, newest first —
+/// the input to [`streaks_from_dates`].
+pub fn logged_dates_desc(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT date FROM activity_log WHERE was_idle = 0 ORDER BY date DESC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// Consecutive-day streaks over distinct logged dates (FR-13). `dates_desc`
+/// must be distinct and newest-first. A run still counts as "current" when its
+/// newest day is yesterday — today's log may simply not have started yet.
+pub fn streaks_from_dates(dates_desc: &[String], today: &str) -> Streaks {
+    let parse = |s: &str| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok();
+    let dates: Vec<chrono::NaiveDate> = dates_desc.iter().filter_map(|s| parse(s)).collect();
+    let days_logged = dates.len() as i64;
+
+    let mut best: i64 = 0;
+    let mut current: i64 = 0;
+    let mut i = 0;
+    while i < dates.len() {
+        let mut len: usize = 1;
+        while i + len < dates.len()
+            && dates[i + len - 1] - dates[i + len] == chrono::Duration::days(1)
+        {
+            len += 1;
+        }
+        best = best.max(len as i64);
+        // Only the newest run can be current (input is descending).
+        if i == 0 {
+            if let Some(t) = parse(today) {
+                if (0..=1).contains(&(t - dates[0]).num_days()) {
+                    current = len as i64;
+                }
+            }
+        }
+        i += len;
+    }
+    Streaks {
+        current,
+        best,
+        days_logged,
+    }
+}
+
 pub fn update_activity(
     conn: &Connection,
     crypto: &Crypto,
@@ -370,7 +547,7 @@ pub fn delete_activity(conn: &Connection, id: i64) -> Result<(), String> {
 pub fn list_categories(conn: &Connection) -> Result<Vec<Category>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, color, is_productive, sort_order
+            "SELECT id, name, color, is_productive, sort_order, weekly_target_min
              FROM categories ORDER BY sort_order, id",
         )
         .map_err(|e| e.to_string())?;
@@ -382,6 +559,7 @@ pub fn list_categories(conn: &Connection) -> Result<Vec<Category>, String> {
                 color: r.get(2)?,
                 is_productive: r.get::<_, i64>(3)? != 0,
                 sort_order: r.get(4)?,
+                weekly_target_min: r.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -420,10 +598,13 @@ pub fn update_category(
     name: &str,
     color: &str,
     is_productive: bool,
+    weekly_target_min: i64,
 ) -> Result<(), String> {
     conn.execute(
-        "UPDATE categories SET name = ?1, color = ?2, is_productive = ?3 WHERE id = ?4",
-        params![name, color, is_productive as i64, id],
+        "UPDATE categories
+         SET name = ?1, color = ?2, is_productive = ?3, weekly_target_min = ?4
+         WHERE id = ?5",
+        params![name, color, is_productive as i64, weekly_target_min, id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -442,11 +623,15 @@ pub fn delete_category(conn: &Connection, id: i64) -> Result<(), String> {
 pub fn day_totals(conn: &Connection, start: &str, end: &str) -> Result<Vec<DayTotal>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT date,
-                COALESCE(SUM(CASE WHEN was_idle = 0 THEN interval_min ELSE 0 END), 0) AS worked,
-                COALESCE(SUM(CASE WHEN was_idle = 1 THEN interval_min ELSE 0 END), 0) AS idle
-             FROM activity_log WHERE date BETWEEN ?1 AND ?2
-             GROUP BY date ORDER BY date",
+            "SELECT a.date,
+                COALESCE(SUM(CASE WHEN a.was_idle = 0 THEN a.interval_min ELSE 0 END), 0) AS worked,
+                COALESCE(SUM(CASE WHEN a.was_idle = 1 THEN a.interval_min ELSE 0 END), 0) AS idle,
+                COALESCE(SUM(CASE WHEN a.was_idle = 0 AND COALESCE(c.is_productive, 0) = 1
+                              THEN a.interval_min ELSE 0 END), 0) AS productive
+             FROM activity_log a
+             LEFT JOIN categories c ON a.category_id = c.id
+             WHERE a.date BETWEEN ?1 AND ?2
+             GROUP BY a.date ORDER BY a.date",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -455,6 +640,7 @@ pub fn day_totals(conn: &Connection, start: &str, end: &str) -> Result<Vec<DayTo
                 date: r.get(0)?,
                 worked_minutes: r.get(1)?,
                 idle_minutes: r.get(2)?,
+                productive_minutes: r.get(3)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -748,16 +934,23 @@ mod tests {
     }
 
     #[test]
-    fn totals_split_worked_and_idle() {
+    fn totals_split_worked_idle_and_productive() {
         let conn = mem();
         let crypto = crate::crypto::Crypto::test_fixed();
-        insert_activity(&conn, &crypto, "work", None, false, 15).unwrap();
+        let cats = list_categories(&conn).unwrap();
+        let productive = cats.iter().find(|c| c.is_productive).unwrap();
+        let busywork = cats.iter().find(|c| !c.is_productive).unwrap();
+        insert_activity(&conn, &crypto, "work", Some(productive.id), false, 15).unwrap();
+        insert_activity(&conn, &crypto, "scroll", Some(busywork.id), false, 15).unwrap();
+        insert_activity(&conn, &crypto, "untagged", None, false, 15).unwrap();
         insert_activity(&conn, &crypto, IDLE_LABEL, None, true, 15).unwrap();
         let today = Local::now().format("%Y-%m-%d").to_string();
         let totals = day_totals(&conn, &today, &today).unwrap();
         assert_eq!(totals.len(), 1);
-        assert_eq!(totals[0].worked_minutes, 15);
+        assert_eq!(totals[0].worked_minutes, 45);
         assert_eq!(totals[0].idle_minutes, 15);
+        // Only the productive-category interval counts; uncategorized doesn't.
+        assert_eq!(totals[0].productive_minutes, 15);
     }
 
     fn today() -> String {
@@ -845,5 +1038,106 @@ mod tests {
         assert_eq!(get_setting_or(&conn, "schedule_start_min", "x"), "540");
         assert_eq!(get_setting_or(&conn, "schedule_end_min", "x"), "1080");
         assert_eq!(get_setting_or(&conn, "schedule_days", "x"), "1,2,3,4,5");
+    }
+
+    #[test]
+    fn logs_carry_the_interval_they_were_recorded_with() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        insert_activity(&conn, &crypto, "old entry", None, false, 15).unwrap();
+        // The user changes the interval; history must not change with it.
+        set_setting(&conn, "interval_minutes", "10").unwrap();
+        insert_activity(&conn, &crypto, "new entry", None, false, 10).unwrap();
+        let logs = logs_for_date(&conn, &crypto, &today()).unwrap();
+        let total: i64 = logs.iter().map(|l| l.interval_min).sum();
+        assert_eq!(total, 25); // 15 + 10, not 2 × current setting
+    }
+
+    #[test]
+    fn migration_v3_defaults_targets_off_and_they_round_trip() {
+        let conn = mem();
+        let cats = list_categories(&conn).unwrap();
+        assert!(cats.iter().all(|c| c.weekly_target_min == 0));
+        update_category(&conn, cats[0].id, &cats[0].name, &cats[0].color, true, 600).unwrap();
+        assert_eq!(list_categories(&conn).unwrap()[0].weekly_target_min, 600);
+    }
+
+    #[test]
+    fn category_memory_matches_latest_exact_text() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        let cats = list_categories(&conn).unwrap();
+        insert_activity(&conn, &crypto, "Standup", Some(cats[1].id), false, 15).unwrap();
+        insert_activity(&conn, &crypto, "standup ", Some(cats[2].id), false, 15).unwrap();
+        insert_activity(&conn, &crypto, "deep spec", None, false, 15).unwrap();
+        // Latest assignment for the normalized text wins; unknown text → None.
+        assert_eq!(
+            last_category_for(&conn, &crypto, "  STANDUP").unwrap(),
+            Some(cats[2].id)
+        );
+        assert_eq!(
+            last_category_for(&conn, &crypto, "deep spec").unwrap(),
+            None
+        );
+        assert_eq!(
+            last_category_for(&conn, &crypto, "never seen").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn search_finds_substrings_case_insensitively_and_skips_idle() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        insert_activity(&conn, &crypto, "Pricing doc review", None, false, 15).unwrap();
+        insert_activity(&conn, &crypto, "email triage", None, false, 15).unwrap();
+        insert_activity(&conn, &crypto, IDLE_LABEL, None, true, 15).unwrap();
+        let hits = search_entries(&conn, &crypto, "PRICING", 50).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].activity, "Pricing doc review");
+        assert!(search_entries(&conn, &crypto, "desk", 50)
+            .unwrap()
+            .is_empty());
+        assert!(search_entries(&conn, &crypto, "   ", 50)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn search_respects_limit_newest_first() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        for i in 0..5 {
+            insert_activity(&conn, &crypto, &format!("task {i}"), None, false, 15).unwrap();
+        }
+        let hits = search_entries(&conn, &crypto, "task", 3).unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].activity, "task 4"); // newest first
+    }
+
+    #[test]
+    fn streaks_count_runs_and_tolerate_an_unlogged_today() {
+        let s = |d: &[&str], today: &str| {
+            let v: Vec<String> = d.iter().map(|x| x.to_string()).collect();
+            streaks_from_dates(&v, today)
+        };
+        // No data.
+        let z = s(&[], "2026-06-10");
+        assert_eq!((z.current, z.best, z.days_logged), (0, 0, 0));
+        // Run ends today.
+        let a = s(&["2026-06-10", "2026-06-09", "2026-06-08"], "2026-06-10");
+        assert_eq!((a.current, a.best, a.days_logged), (3, 3, 3));
+        // Run ends yesterday — still current (today's log hasn't started).
+        let b = s(&["2026-06-09", "2026-06-08"], "2026-06-10");
+        assert_eq!(b.current, 2);
+        // Run ended two days ago — broken; best still remembers it.
+        let c = s(&["2026-06-08", "2026-06-07"], "2026-06-10");
+        assert_eq!((c.current, c.best), (0, 2));
+        // Older longer run sets best; newest short run is current.
+        let d = s(
+            &["2026-06-10", "2026-06-05", "2026-06-04", "2026-06-03"],
+            "2026-06-10",
+        );
+        assert_eq!((d.current, d.best, d.days_logged), (1, 3, 4));
     }
 }

@@ -8,12 +8,17 @@ interface AppStore {
   theme: ThemePreference;
   setTheme: (t: ThemePreference) => Promise<void>;
   loadTheme: () => Promise<void>;
+  /** Whether the ⌘/Ctrl-K journal search palette is open. */
+  searchOpen: boolean;
+  setSearchOpen: (open: boolean) => void;
 }
 
 /** App-wide UI state. Theme changes broadcast to every window via a Tauri event
  *  so the dashboard and the always-open prompt window stay in sync. */
 export const useAppStore = create<AppStore>((set) => ({
   theme: "system",
+  searchOpen: false,
+  setSearchOpen: (open) => set({ searchOpen: open }),
   setTheme: async (t) => {
     set({ theme: t });
     applyTheme(t);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
+import { SearchOverlay } from "./SearchOverlay";
 import Onboarding from "../screens/Onboarding";
 import { api } from "../lib/api";
 
@@ -25,6 +26,7 @@ export function Layout() {
       <main className="h-full flex-1 overflow-y-auto">
         <Outlet />
       </main>
+      <SearchOverlay />
     </div>
   );
 }

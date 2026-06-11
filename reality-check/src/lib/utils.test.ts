@@ -5,9 +5,11 @@ import {
   formatDuration,
   hhmm,
   hoursDecimal,
+  lastNWeeks,
   secondsUntil,
   shiftISO,
   shiftMonthISO,
+  signedDuration,
   startOfMonthISO,
   startOfWeekISO,
   todayISO,
@@ -59,6 +61,32 @@ describe("date math", () => {
     expect(endOfMonthISO("2028-02-11")).toBe("2028-02-29");
     expect(shiftMonthISO("2026-01-15", 1)).toBe("2026-02-01");
     expect(shiftMonthISO("2026-01-15", -1)).toBe("2025-12-01");
+  });
+});
+
+describe("signedDuration", () => {
+  it("signs deltas and uses a typographic minus", () => {
+    expect(signedDuration(90)).toBe("+1h 30m");
+    expect(signedDuration(-45)).toBe("−45m");
+    expect(signedDuration(0)).toBe("±0m");
+  });
+});
+
+describe("lastNWeeks", () => {
+  it("returns Monday-anchored inclusive ranges, oldest first", () => {
+    const weeks = lastNWeeks(3, "2026-06-10"); // a Wednesday
+    expect(weeks).toEqual([
+      { start: "2026-05-25", end: "2026-05-31" },
+      { start: "2026-06-01", end: "2026-06-07" },
+      { start: "2026-06-08", end: "2026-06-14" },
+    ]);
+  });
+
+  it("ends with the week containing today", () => {
+    const weeks = lastNWeeks(8, "2026-06-10");
+    expect(weeks).toHaveLength(8);
+    expect(weeks[7].start).toBe("2026-06-08");
+    expect(weeks[0].start).toBe(shiftISO("2026-06-08", -49));
   });
 });
 

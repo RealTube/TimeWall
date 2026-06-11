@@ -11,6 +11,8 @@ import type {
   DayTotal,
   FocusStats,
   HeatCell,
+  SearchHit,
+  Streaks,
   ThemePreference,
   TopActivity,
 } from "./types";
@@ -52,8 +54,13 @@ export const api = {
   categories: () => call<Category[]>("list_categories"),
   addCategory: (name: string, color: string, isProductive: boolean) =>
     call<number>("add_category", { name, color, isProductive }),
-  updateCategory: (id: number, name: string, color: string, isProductive: boolean) =>
-    call<void>("update_category", { id, name, color, isProductive }),
+  updateCategory: (
+    id: number,
+    name: string,
+    color: string,
+    isProductive: boolean,
+    weeklyTargetMin = 0,
+  ) => call<void>("update_category", { id, name, color, isProductive, weeklyTargetMin }),
   deleteCategory: (id: number) => call<void>("delete_category", { id }),
 
   // Insights
@@ -67,10 +74,14 @@ export const api = {
     call<TopActivity[]>("get_top_activities", { start, end, limit }),
   focusStats: (start: string, end: string) =>
     call<FocusStats>("get_focus_stats", { start, end }),
+  search: (query: string, limit = 60) =>
+    call<SearchHit[]>("search_entries", { query, limit }),
+  streaks: () => call<Streaks>("get_streaks"),
 
   // Data ownership
   exportCsv: (start: string, end: string) =>
     call<string | null>("export_csv", { start, end }),
+  saveReport: (content: string) => call<string | null>("save_report", { content }),
   eraseAllEntries: () => call<number>("erase_all_entries"),
 
   // Autostart

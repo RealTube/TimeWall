@@ -8,7 +8,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::db::{
     self, ActivityLog, AppState, Category, CategorySlice, DayTotal, FocusStats, HeatCell,
-    TopActivity,
+    SearchHit, Streaks, TopActivity,
 };
 use crate::timer::evaluate_due;
 
@@ -57,6 +57,13 @@ pub fn log_activity(
         let interval: i64 = db::get_setting_or(&conn, "interval_minutes", "15")
             .parse()
             .unwrap_or(15);
+        // FR-11: an explicit choice wins; otherwise remember what the user
+        // categorized this exact text as last time. Inference must never block
+        // the log, so a lookup error degrades to "uncategorized".
+        let category_id = match category_id {
+            Some(id) => Some(id),
+            None => db::last_category_for(&conn, &state.crypto, &activity).unwrap_or(None),
+        };
         db::insert_activity(
             &conn,
             &state.crypto,
@@ -334,11 +341,16 @@ pub fn update_category(
     name: String,
     color: String,
     is_productive: bool,
+    weekly_target_min: Option<i64>,
 ) -> Result<(), String> {
     let name = clean(&name, MAX_CATEGORY_LEN)?;
     let color = clean(&color, 9)?;
+    let target = weekly_target_min.unwrap_or(0);
+    if !(0..=6000).contains(&target) {
+        return Err("Weekly target must be 0–100 hours".into());
+    }
     let conn = lock(&state)?;
-    db::update_category(&conn, id, &name, &color, is_productive)
+    db::update_category(&conn, id, &name, &color, is_productive, target)
 }
 
 #[tauri::command]
@@ -406,6 +418,34 @@ pub fn get_focus_stats(
     db::focus_stats(&conn, &state.crypto, &start, &end)
 }
 
+/// Journal search (FR-15): substring over decrypted entries, newest first.
+/// The query is never logged or persisted.
+#[tauri::command]
+pub fn search_entries(
+    state: State<AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchHit>, String> {
+    let conn = lock(&state)?;
+    db::search_entries(
+        &conn,
+        &state.crypto,
+        &query,
+        limit.unwrap_or(60).clamp(1, 200),
+    )
+}
+
+/// Consecutive-logged-day streaks (FR-13) — §8's adoption metric, surfaced.
+#[tauri::command]
+pub fn get_streaks(state: State<AppState>) -> Result<Streaks, String> {
+    let dates = {
+        let conn = lock(&state)?;
+        db::logged_dates_desc(&conn)?
+    };
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    Ok(db::streaks_from_dates(&dates, &today))
+}
+
 // --- Data ownership ----------------------------------------------------------
 
 /// Quote a CSV field per RFC 4180 when it contains a delimiter, quote, or newline.
@@ -470,6 +510,35 @@ pub fn export_csv(
         ));
     }
     std::fs::write(&path, out).map_err(|e| format!("could not write file: {e}"))?;
+    Ok(Some(path.display().to_string()))
+}
+
+/// Save a frontend-rendered Markdown report through a native save dialog
+/// (FR-14). Mirrors `export_csv`: data leaves the machine only by the user's
+/// hand. Returns the chosen path, or `None` if the user cancelled.
+#[tauri::command]
+pub fn save_report(app: AppHandle, content: String) -> Result<Option<String>, String> {
+    const MAX_REPORT_BYTES: usize = 2 * 1024 * 1024;
+    if content.trim().is_empty() {
+        return Err("Nothing to save".into());
+    }
+    if content.len() > MAX_REPORT_BYTES {
+        return Err("Report is unexpectedly large".into());
+    }
+    let default_name = format!("hima-report-{}.md", chrono::Local::now().format("%Y-%m-%d"));
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .set_file_name(&default_name)
+        .add_filter("Markdown", &["md"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| format!("invalid path: {e}"))?;
+    std::fs::write(&path, content).map_err(|e| format!("could not write file: {e}"))?;
     Ok(Some(path.display().to_string()))
 }
 

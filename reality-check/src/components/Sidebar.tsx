@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
-import { ChartNoAxesColumn, Clock3, Pause, Play, Settings as SettingsIcon } from "lucide-react";
+import {
+  ChartNoAxesColumn,
+  Clock3,
+  Pause,
+  Play,
+  Search,
+  Settings as SettingsIcon,
+} from "lucide-react";
 import { api } from "../lib/api";
+import { useAppStore } from "../lib/store";
+import { isMac } from "./SearchOverlay";
 import { cn } from "../lib/utils";
 
 const NAV = [
@@ -13,6 +22,7 @@ const NAV = [
 
 export function Sidebar() {
   const [paused, setPaused] = useState(false);
+  const setSearchOpen = useAppStore((s) => s.setSearchOpen);
 
   const refresh = () =>
     api
@@ -44,6 +54,17 @@ export function Sidebar() {
         <Logo />
         <span className="text-[15px] font-semibold tracking-tight">Hima</span>
       </div>
+
+      <button
+        onClick={() => setSearchOpen(true)}
+        className="mb-4 flex h-10 items-center gap-3 rounded-xl border border-border/70 bg-surface-2/50 px-3 text-sm font-medium text-muted transition-colors hover:border-muted/40 hover:text-fg"
+      >
+        <Search className="size-[18px]" strokeWidth={2} />
+        Search
+        <kbd className="ml-auto rounded-md bg-surface-2 px-1.5 py-0.5 text-[11px] tracking-wide">
+          {isMac ? "⌘K" : "Ctrl K"}
+        </kbd>
+      </button>
 
       <nav className="flex flex-col gap-1">
         {NAV.map(({ to, label, icon: Icon, end }) => (

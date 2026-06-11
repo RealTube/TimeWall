@@ -92,6 +92,10 @@ Answers "how is today going?" at a glance, newest first:
   the resident scheduler legible — trust comes from visibility.
 - A **category distribution strip** (stacked bar + legend) mirrors the same
   colors used everywhere else.
+- A **quick-log composer** sits above the timeline (1.1, FR-10): same input
+  grammar as the prompt — one line, Enter, a return-key glyph that appears
+  only once there is something to log. It looks like the first row of the
+  journal because that is what it becomes.
 - Timeline rows: time → category dot → text. **Edit/delete affordances appear
   on hover only** (deference; the journal reads as a document, acts as a
   table). Enter saves, Esc cancels — same grammar as the prompt.
@@ -104,19 +108,38 @@ what will appear and how to earn it:
 1. **Period switcher** (Week | Month segmented control) + chevron navigation,
    future disabled — placed top-right, where both HIG and Fluent put view
    controls; the title stays put so switching feels like re-filtering, not
-   navigating.
+   navigating. A **Report** button sits beside them: the review's exit door
+   (save the visible period as Markdown) lives where the review happens, not
+   in Settings.
 2. **Hero**: total hours + productive-share ring (green — verdict color).
+   Below the verdict, two quiet lines added in 1.1: the **comparison** to the
+   previous period ("+2h 15m vs last week · productive share up 3 pts" — a
+   delta, never a judgment) and the **audit streak** pill ("Day 12 of your
+   audit · best run 15"). The streak is method progress in the method's own
+   vocabulary; deliberately no flame, no broken-streak state — it simply
+   reappears at day 1.
 3. **Daily hours**: worked bars with away stacked translucent above, 8 h
    dashed reference, **click-to-drill into the day's journal** — aggregate
    first, evidence one click away.
-4. **When you work** heatmap: rows Mon–Sun, columns trimmed to lived-in
+4. **Last 8 weeks** trend (1.1): two lines on one scale — worked (accent,
+   with a soft area fill) and productive (verdict green) — because "is it
+   getting better?" is a two-line question. Hand-rolled SVG like every other
+   chart; week-start labels every other point so the axis never crowds.
+5. **Where the time moved** (1.1): two columns, "More time on" / "Less time
+   on", three named activities each with signed deltas in tabular numerals.
+   Arrows are muted, not colored — more time on something is not inherently
+   good or bad; the audit names the shift and the user judges it.
+6. **When you work** heatmap: rows Mon–Sun, columns trimmed to lived-in
    hours, opacity ∝ minutes, exact value in the tooltip. (The single most
    requested time-audit view; RescueTime's equivalent is its most cited.)
-5. **Focus**: three stat tiles (avg block / longest block / switches per
+7. **Focus**: three stat tiles (avg block / longest block / switches per
    day) with a one-line definition under the card title — a metric a user
    can't define is a metric they won't trust.
-6. **Top activities**: ranked list, time + share-of-total, hairline bars.
-7. **By category**: the same bars as v0.1, now period-aware.
+8. **Top activities**: ranked list, time + share-of-total, hairline bars.
+9. **By category**: the same bars, now period-aware. In week view a category
+   with a target shows a thin tick on its track and "6h of 10h" in place of
+   the plain figure — the target is a *lens*, so it renders as a landmark on
+   the existing bar, never as a second progress bar demanding completion.
 
 ### 3.4 Settings
 Flat grouped rows (HIG style): label + hint left, control right; **every
@@ -125,7 +148,9 @@ control commits instantly** — no Save button anywhere in the app.
 - Controls follow platform grammar: toggles for binary, steppers for small
   ranges, segmented control for theme, native `<select>` for times (free
   keyboard/screen-reader support), round day chips (M T W T F S S) for the
-  schedule.
+  schedule. Category rows carry a compact hours stepper for the optional
+  weekly target — "—" means off, and the section's footnote says what targets
+  are (a quiet lens) and what they will never do (alert).
 - **Data** section: CSV export as three scoped buttons (This week / This
   month / All time) → native save dialog → "Saved to …" confirmation in
   place. Erase uses an **inline two-step confirm** (button arms for 4 s,
@@ -134,7 +159,19 @@ control commits instantly** — no Save button anywhere in the app.
 - The privacy promise is restated at the bottom of Settings where the data
   controls live — the place a skeptical user will look for it.
 
-### 3.5 Onboarding
+### 3.5 Search palette (1.1)
+`⌘/Ctrl K` anywhere (or the sidebar's Search field) opens a glass palette over
+a dimmed, blurred backdrop — the same material family as the prompt, because
+both are "ask Hima something" surfaces:
+
+- One large input, results grouped under Today / Yesterday / weekday
+  headings, matches tinted with the accent (a tint, not a highlighter).
+- Fully keyboard-driven: ↑↓ move, ↵ opens that day's full journal in
+  Insights, Esc dismisses. The footer teaches exactly those three keys.
+- The footer's idle line — "Your journal, searched on-device" — restates the
+  privacy promise at the moment of use.
+
+### 3.6 Onboarding
 Three screens, < 30 s, no account: promise (with the privacy note up front),
 rhythm (interval presets + quarter-hour snap), launch-at-login. Dots show
 progress; everything is skippable-fast because the defaults are the method's

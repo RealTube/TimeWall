@@ -6,6 +6,9 @@ export interface ActivityLog {
   activity: string;
   category_id: number | null;
   was_idle: boolean;
+  /** Minutes this entry covered when it was logged — totals always use this,
+   *  never the current interval setting. */
+  interval_min: number;
 }
 
 export interface Category {
@@ -14,6 +17,8 @@ export interface Category {
   color: string;
   is_productive: boolean;
   sort_order: number;
+  /** Optional weekly target in minutes; 0 = no target. */
+  weekly_target_min: number;
 }
 
 export type ThemePreference = "light" | "dark" | "system";
@@ -38,6 +43,8 @@ export interface DayTotal {
   date: string;
   worked_minutes: number;
   idle_minutes: number;
+  /** Worked minutes in categories flagged productive. */
+  productive_minutes: number;
 }
 
 export interface CategorySlice {
@@ -66,4 +73,20 @@ export interface FocusStats {
   longest_block_min: number;
   switches_per_day: number;
   days_counted: number;
+}
+
+/** A journal entry matched by search (newest first). */
+export interface SearchHit {
+  id: number;
+  date: string;
+  time: string;
+  activity: string;
+  category_id: number | null;
+}
+
+/** Consecutive logged-day streaks; a day counts with ≥1 non-away check-in. */
+export interface Streaks {
+  current: number;
+  best: number;
+  days_logged: number;
 }

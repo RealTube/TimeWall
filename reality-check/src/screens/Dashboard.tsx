@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { motion } from "framer-motion";
-import { Check, MoonStar, Pencil, Timer, Trash2, X } from "lucide-react";
+import { Check, CornerDownLeft, MoonStar, Pencil, Plus, Timer, Trash2, X } from "lucide-react";
 import { api } from "../lib/api";
 import type { ActivityLog, AppSettings, Category } from "../lib/types";
 import { cn, countdownLabel, formatDuration, greeting, hhmm, secondsUntil } from "../lib/utils";
@@ -44,9 +44,12 @@ export default function Dashboard() {
 
   const interval = settings?.interval_minutes ?? 15;
   const worked = logs.filter((l) => !l.was_idle);
-  const idleCount = logs.length - worked.length;
-  const workedMin = worked.length * interval;
-  const idleMin = idleCount * interval;
+  // Sum what each entry actually covered when it was logged — changing the
+  // interval setting must never rewrite today's totals.
+  const workedMin = worked.reduce((a, l) => a + (l.interval_min ?? interval), 0);
+  const idleMin = logs
+    .filter((l) => l.was_idle)
+    .reduce((a, l) => a + (l.interval_min ?? interval), 0);
   const ringValue = Math.min(1, workedMin / WORKDAY_MIN);
   const animatedHours = useCountUp(workedMin / 60);
 
@@ -61,7 +64,7 @@ export default function Dashboard() {
         (cat
           ? { name: cat.name, color: cat.color, minutes: 0 }
           : { name: "Uncategorized", color: "var(--idle)", minutes: 0 });
-      slice.minutes += interval;
+      slice.minutes += l.interval_min ?? interval;
       acc.set(key, slice);
     });
     return [...acc.values()].sort((a, b) => b.minutes - a.minutes);
@@ -144,6 +147,8 @@ export default function Dashboard() {
           Timeline
         </h2>
 
+        <QuickLog onLogged={load} />
+
         <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-soft">
           {logs.length === 0 ? (
             <EmptyState interval={interval} paused={settings?.paused ?? false} />
@@ -162,6 +167,55 @@ export default function Dashboard() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** Log between prompts (FR-10): one line + Enter, same rules as the prompt.
+ *  Categories come back on their own — Hima remembers the last one you gave
+ *  the same words (FR-11). */
+function QuickLog({ onLogged }: { onLogged: () => void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    const value = text.trim();
+    if (!value || busy) return;
+    setBusy(true);
+    try {
+      await api.log(value);
+      setText("");
+      onLogged();
+    } catch (e) {
+      console.error("quick log failed", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+      className="mb-3 flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-1 shadow-soft transition-colors focus-within:border-accent/50"
+    >
+      <Plus className="size-4 shrink-0 text-muted" />
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Just did something? Log it now…"
+        autoComplete="off"
+        spellCheck={false}
+        maxLength={200}
+        className="h-11 w-full bg-transparent text-[15px] placeholder:text-muted/50 focus:outline-none"
+      />
+      {text.trim() && (
+        <kbd className="grid size-6 shrink-0 place-items-center rounded-md bg-surface-2 text-muted">
+          <CornerDownLeft className="size-3" />
+        </kbd>
+      )}
+    </form>
   );
 }
 

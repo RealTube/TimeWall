@@ -1,6 +1,6 @@
 [package]
 name = "reality-check"
-version = "1.0.0"
+version = "1.1.0"
 description = "Hima — the automated time audit. Every interval it asks what you just did and shows where your time actually went, privately and encrypted on-device."
 authors = ["Gevor"]
 license = "MIT"

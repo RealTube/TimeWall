@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Product** | Hima — the automated time audit |
-| **Version** | 1.0 |
-| **Status** | Approved — implemented |
+| **Version** | 1.1 |
+| **Status** | Approved — implemented (1.0 §1–10; 1.1 §11) |
 | **Last updated** | 2026-06-10 |
 | **Platforms** | Windows 10/11, macOS 12+ (Linux best-effort) |
 
@@ -260,3 +260,125 @@ requirements above:
    SECURITY, CONTRIBUTING, CHANGELOG.
 4. Fresh-install path verified: onboarding → first prompt → first insight →
    export → erase.
+
+---
+
+## 11. Hima 1.1 — "The Ritual"
+
+### 11.1 Why this release
+
+1.0 made the audit effortless to **collect**. Field reality after a few weeks of
+use shows the loop still leaks in three places, all *after* collection:
+
+1. **The numbers don't answer "is it getting better?"** Insights shows one
+   period at a time. Drucker's method is explicit that the value is in the
+   *review and comparison* — a week in isolation is trivia; a week against the
+   previous one is a decision.
+2. **Categorizing is a tax users stop paying.** The category chips cost a click
+   per prompt, so after day three most entries arrive uncategorized and the
+   productive/busywork split degrades. The fix must respect §2.1 — *zero* added
+   prompt friction — which rules out any mandatory picker and any cloud AI
+   (§2.3). What's left is the obviously right thing: **remember what the user
+   already told us.** If "standup" was Meetings last time, it is Meetings now.
+3. **The journal is write-only between reviews.** "When did I last touch the
+   pricing doc?" is a question the data can answer and the UI cannot. A
+   private, local, instant search turns the journal from a log into a memory.
+
+1.1 also pays down two promises 1.0 wrote but didn't keep: §8 defines the
+5-consecutive-day adoption bar but never shows it to the user, and §7 explicitly
+deferred goals/budgets and auto-categorization to 1.1.
+
+**Release theme:** turn the data users already have into a weekly *ritual* —
+compare, review, share, adjust — without adding one second to the prompt.
+
+### 11.2 New functional requirements
+
+#### FR-10 Check in anytime (P1)
+The timer owns the cadence, but reality doesn't wait for :15.
+1. **Tray → "Check in now"** surfaces the prompt immediately and re-arms the
+   schedule (no double prompt a minute later).
+2. **Dashboard quick log:** a composer above the timeline logs an entry with
+   one line + Enter — same length cap, same validation as the prompt.
+3. Neither path may skew honesty rules: manual entries still cover one
+   interval, never more.
+
+#### FR-11 Remembered categories (P0)
+1. When an entry is logged **without** a category, Hima assigns the category
+   the user most recently gave the *same text* (case- and
+   whitespace-insensitive match).
+2. Inference is deterministic, local, and instant — a lookup over the user's
+   own history. No model, no fuzzy guessing: a wrong guess costs trust (§2.2),
+   an exact-match memory cannot guess wrong.
+3. An explicit chip selection always wins over memory. Editing an entry never
+   rewrites other entries.
+4. The prompt UI is unchanged — this is invisible infrastructure.
+
+#### FR-12 Trends — "is it getting better?" (P0)
+1. The Insights hero compares the visible period to the **previous** one:
+   worked-hours delta and productive-share delta, phrased neutrally
+   ("2h 15m more than last week", never "you fell behind").
+2. A **Trend** card charts the last 8 weeks of worked vs productive hours, so
+   direction is visible at a glance.
+3. A **"Where the time moved"** card names the activities that gained and lost
+   the most time vs the previous period (top 3 each, minimum one interval of
+   change). This is the audit's actionable output: cut by name, not by vibe.
+
+#### FR-13 The audit streak (P1)
+1. Insights surfaces **consecutive logged days** (a day counts with ≥ 1
+   non-away check-in) and the best run — §8's adoption metric, finally visible.
+2. Framing is calm method-progress ("Day 12 of your audit"), not gamification:
+   no fire emoji, no broken-streak shaming, no notifications (§2.4, §2.5).
+
+#### FR-14 Weekly report (P1)
+1. One click in Insights saves the visible period as a **Markdown report**
+   (native save dialog): hours, productive share, daily table, top activities,
+   focus profile, category split.
+2. Built for the coach/accountability-partner workflow from §4; plain text so
+   it pastes into anything. Like CSV, it leaves the machine only by the user's
+   hand (§2.3).
+
+#### FR-15 Journal search (P0)
+1. **Ctrl/⌘ K** (and a sidebar entry) opens a search palette over the entire
+   journal: case-insensitive substring over decrypted entries, newest first,
+   grouped by day, keyboard-navigable.
+2. Selecting a result jumps to that day's full journal in Insights.
+3. Search runs entirely in-process over the encrypted store; the query is never
+   persisted. Results within 250 ms at a year of data (NFR-2 extension).
+
+#### FR-16 Gentle weekly targets (P2)
+1. A category may carry an optional **weekly target** (hours/week, default
+   off). Set inline in Settings → Categories.
+2. The week view shows quiet progress against the target ("6h of 10h") and a
+   tick on the category bar — informational, never red, never notifying.
+   Budgets in Hima are a *lens*, not an alarm (§2.4).
+3. Targets are ignored in month view (a month target is a different product
+   decision; out of scope).
+
+### 11.3 Non-functional deltas
+
+- **NFR-2 (performance):** journal search < 250 ms and report generation
+  < 100 ms at 35k entries; all other budgets unchanged.
+- **NFR-1/-5 (privacy & security):** no new I/O surface beyond one
+  `save_report` dialog command (mirrors `export_csv`); search queries live only
+  in memory; report content is generated from data already on screen.
+- **Schema:** migration v3 is additive (`categories.weekly_target_min`,
+  default 0). Shipped migration blocks remain untouched (NFR-3).
+
+### 11.4 Explicitly out of scope (1.1)
+
+- Fuzzy/semantic matching for category memory — exact match only until real
+  usage shows it's insufficient.
+- Streak notifications or any "don't break the chain" mechanics.
+- Per-day or per-month targets; target alerts of any kind.
+- Everything in §7 that isn't named above (cloud, mobile, task management).
+
+### 11.5 Release criteria (1.1)
+
+1. FR-10…FR-16 implemented; P0s demonstrated on a fresh profile and on a
+   database migrated from 1.0.
+2. New pure logic (streaks, category inference, search, target math, trend
+   bucketing) unit-tested; CI fully green (typecheck, Vitest, build,
+   `cargo test`, `clippy -D warnings`, `fmt --check`).
+3. Docs updated: PRD (this section), ARCHITECTURE (new commands + migration),
+   DESIGN (new components), CHANGELOG, README.
+4. Prompt interaction cost unchanged: zero new controls in the prompt window.

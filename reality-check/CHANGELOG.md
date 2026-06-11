@@ -4,6 +4,42 @@ All notable changes to Hima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] — 2026-06-10
+
+"The Ritual" release: the data you already collect becomes a weekly review —
+compare, search, share, adjust — with zero new friction at the prompt.
+Scoped in [PRD §11](docs/PRD.md#11-hima-11--the-ritual).
+
+### Added
+- **Remembered categories** — log "standup" once as Meetings and every later
+  "standup" categorizes itself. Deterministic, local, exact-match; an explicit
+  chip always wins.
+- **Trends in Insights**:
+  - Hero comparison vs the previous period ("+2h 15m vs last week ·
+    productive share up 3 pts").
+  - **Last 8 weeks** chart — worked vs productive hours per week.
+  - **Where the time moved** — the activities that gained and lost the most
+    time vs the previous period, by name.
+- **Journal search** — `⌘/Ctrl K` opens an on-device search palette over every
+  entry; ↵ jumps to that day's full journal. Queries never touch disk.
+- **Audit streak** — consecutive logged days (and best run) in the Insights
+  hero. Calm copy; no gamification.
+- **Markdown report** — save any visible period (totals, days, top
+  activities, focus, categories) via a native save dialog, for coaches and
+  accountability partners.
+- **Check in anytime** — "Check in now" in the tray (re-arms the schedule) and
+  a quick-log composer on the dashboard timeline.
+- **Gentle weekly targets** — optional hours-per-week per category, set inline
+  in Settings; week view shows a quiet tick and "6h of 10h". Never red, never
+  notifies.
+- Design system: keyboard-only focus rings, `prefers-reduced-motion` support,
+  accent caret, ambient header light, search-highlight styling.
+
+### Changed
+- Day totals now carry productive minutes, so the hero ring, trend, and
+  report all share one definition of "productive".
+- Database schema migrated to v3 (additive; existing data is preserved).
+
 ## [1.0.0] — 2026-06-10
 
 The "reality check" release: Hima graduates from a logger into a full time

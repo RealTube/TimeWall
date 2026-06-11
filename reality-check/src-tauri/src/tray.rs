@@ -12,11 +12,12 @@ use crate::db::{self, AppState};
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Hima", true, None::<&str>)?;
+    let check_in = MenuItem::with_id(app, "check-in", "Check in now", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause / Resume", true, None::<&str>)?;
     let pause_hour = MenuItem::with_id(app, "pause-hour", "Pause for 1 hour", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Hima", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &pause, &pause_hour, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &check_in, &pause, &pause_hour, &sep, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("hima-tray")
         .tooltip("Hima — your 15-minute reality check")
@@ -24,6 +25,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main(app),
+            "check-in" => check_in_now(app),
             "pause" => toggle_pause(app),
             "pause-hour" => pause_for_an_hour(app),
             "quit" => app.exit(0),
@@ -54,6 +56,23 @@ fn show_main(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+/// Surface the prompt on demand (FR-10). Re-arms the schedule first so the
+/// regular prompt doesn't fire again moments after a manual check-in.
+fn check_in_now(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(conn) = state.conn.lock() {
+            let interval: i64 = db::get_setting_or(&conn, "interval_minutes", "15")
+                .parse()
+                .unwrap_or(15);
+            let align = db::get_setting_or(&conn, "align_to_clock", "1") == "1";
+            let (_fire, next) =
+                crate::timer::evaluate_due(chrono::Utc::now().timestamp(), 0, interval * 60, align);
+            let _ = db::set_setting(&conn, "next_prompt_at", &next.to_string());
+        }
+    }
+    crate::timer::surface_prompt(app);
 }
 
 /// The lunch/meeting case: silence prompts for an hour; the timer clears the
