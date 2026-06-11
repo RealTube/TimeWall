@@ -70,7 +70,7 @@ state (`AppState`), shared by commands and the timer thread. Locks are held
 only for the duration of one statement batch.
 
 ```sql
-categories(id, name, color, is_productive, sort_order)
+categories(id, name, color, is_productive, sort_order, weekly_target_min)
 activity_log(id, date 'YYYY-MM-DD' local, time 'HH:MM:SS' local,
              logged_at_ts unix, activity_enc BLOB,   -- ciphertext
              category_id → categories ON DELETE SET NULL,
@@ -90,8 +90,17 @@ Design notes:
 - `date`/`time` are local (what the user means by "today"); `logged_at_ts` is
   UTC for ordering.
 - Migrations: `PRAGMA user_version`-keyed, append-only blocks
-  (v1 = base schema + seeds, v2 = schedule/pause keys). Defaults use
-  `INSERT OR IGNORE` so re-runs are harmless.
+  (v1 = base schema + seeds, v2 = schedule/pause keys,
+  v3 = `categories.weekly_target_min`). Defaults use `INSERT OR IGNORE` so
+  re-runs are harmless.
+- **Category memory (FR-11)** is a query, not a table: `last_category_for`
+  scans the most recent categorized entries (newest first, capped) for an
+  exact normalized text match. No learned state to migrate or get stale —
+  re-categorizing once immediately becomes the new memory.
+- **Search (FR-15)** is a single ordered scan + decrypt that stops at the
+  result limit; the query string never touches disk. **Streaks (FR-13)** read
+  only `DISTINCT date` (indexed) and run through the pure, unit-tested
+  `streaks_from_dates`.
 
 ## Encryption (crypto.rs)
 
@@ -109,12 +118,16 @@ Highlights (full list in `lib.rs::generate_handler!`):
 
 | Group | Commands |
 |---|---|
-| Logging | `log_activity`, `get_todays_logs`, `get_logs_for_date`, `get_recent_activities`, `update_activity`, `delete_activity` |
+| Logging | `log_activity` (infers a remembered category when none is given), `get_todays_logs`, `get_logs_for_date`, `get_recent_activities`, `update_activity`, `delete_activity` |
 | Scheduling | `get_settings`, `set_interval`, `update_setting` (allow-list + per-key validation), `set_pause`, `pause_for`, `snooze`, `get_next_prompt_at` |
-| Categories | `list_categories`, `add_category`, `update_category`, `delete_category` |
-| Insights | `get_day_totals`, `get_category_breakdown`, `get_hourly_heatmap`, `get_top_activities`, `get_focus_stats` |
-| Data | `export_csv` (native save dialog, BOM, RFC 4180 escaping), `erase_all_entries` |
+| Categories | `list_categories`, `add_category`, `update_category` (incl. weekly target, range-checked), `delete_category` |
+| Insights | `get_day_totals` (worked/away/productive), `get_category_breakdown`, `get_hourly_heatmap`, `get_top_activities`, `get_focus_stats`, `search_entries`, `get_streaks` |
+| Data | `export_csv` (native save dialog, BOM, RFC 4180 escaping), `save_report` (native save dialog, size-capped Markdown), `erase_all_entries` |
 | System | `set_autostart`, `get_autostart` |
+
+The tray's "Check in now" (FR-10) is not an IPC command at all — it lives in
+`tray.rs`, re-arms `next_prompt_at`, and surfaces the prompt window directly,
+keeping the webview-reachable surface minimal (NFR-5).
 
 Conventions: every command returns `Result<_, String>` with a human-readable
 message; inputs are trimmed, length-capped, and range-checked; mutations emit
@@ -150,9 +163,9 @@ a `refresh-dashboard` event so all open views stay live.
 |---|---|---|
 | Scheduler | fire/re-arm decisions, alignment, sleep-gap, schedule windows (incl. overnight, malformed CSV) | `timer.rs` |
 | Crypto | round-trip, nonce uniqueness, tamper rejection | `crypto.rs` |
-| Store | migrations & seeds, upserts, totals split, heatmap, top-activity grouping, focus blocks/switches, export rows, erase | `db.rs` |
+| Store | migrations & seeds (incl. v3 targets), upserts, totals split (worked/away/productive), heatmap, top-activity grouping, focus blocks/switches, category memory, search (matching, limits, idle exclusion), streak runs, export rows, erase | `db.rs` |
 | Commands | CSV escaping, setting validation | `commands.rs` |
-| Frontend | duration/date math, week/month anchors, countdowns | `src/lib/utils.test.ts` (Vitest) |
+| Frontend | duration/date math, week/month anchors, signed deltas, trend week-bucketing ranges, countdowns | `src/lib/utils.test.ts` (Vitest) |
 
 CI (`.github/workflows/ci.yml`) runs typecheck, Vitest, the production build,
 `cargo fmt --check`, `clippy -D warnings`, and `cargo test` on every push/PR.

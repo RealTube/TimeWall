@@ -69,7 +69,10 @@ pub fn run() {
             commands::get_hourly_heatmap,
             commands::get_top_activities,
             commands::get_focus_stats,
+            commands::search_entries,
+            commands::get_streaks,
             commands::export_csv,
+            commands::save_report,
             commands::erase_all_entries,
             commands::set_autostart,
             commands::get_autostart,
@@ -124,8 +127,11 @@ pub fn run() {
             tray::build(app.handle())?;
             timer::spawn(app.handle().clone());
 
-            // On first run, reveal the dashboard so onboarding is seen.
-            if show_onboarding {
+            // On first run, reveal the dashboard so onboarding is seen. In
+            // debug builds, always reveal it so `tauri dev` opens a window
+            // instead of starting silently in the tray (a dev-only nicety —
+            // the shipped app keeps the quiet tray-resident start).
+            if show_onboarding || cfg!(debug_assertions) {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.show();
                     let _ = main.set_focus();

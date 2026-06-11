@@ -191,6 +191,11 @@ export default function Settings() {
             <CategoryRow key={c.id} category={c} onChanged={loadCategories} />
           ))}
           <AddCategory onAdded={loadCategories} />
+          <p className="px-3 pb-1 pt-1.5 text-[12px] text-muted">
+            The hours stepper sets an optional weekly target — shown as a quiet
+            tick in Insights, never an alert. Categories you pick are remembered
+            per activity, so repeats categorize themselves.
+          </p>
         </div>
       </Section>
 
@@ -264,7 +269,7 @@ function Toggle({
     >
       <span
         className={cn(
-          "absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform duration-200",
+          "absolute left-0 top-0.5 size-5 rounded-full bg-white shadow transition-transform duration-200",
           checked ? "translate-x-[18px]" : "translate-x-0.5",
         )}
       />
@@ -482,13 +487,24 @@ function CategoryRow({
   const commit = (next: Partial<Category>) => {
     const merged = { ...category, ...next, name: (next.name ?? name).trim() || category.name };
     api
-      .updateCategory(merged.id, merged.name, merged.color, merged.is_productive)
+      .updateCategory(
+        merged.id,
+        merged.name,
+        merged.color,
+        merged.is_productive,
+        merged.weekly_target_min,
+      )
       .then(onChanged)
       .catch(() => {});
   };
 
+  const stepTarget = (dir: -1 | 1) => {
+    const next = Math.max(0, Math.min(6000, category.weekly_target_min + dir * 60));
+    if (next !== category.weekly_target_min) commit({ weekly_target_min: next });
+  };
+
   return (
-    <div className="flex items-center gap-3 rounded-xl px-3 py-2 hover:bg-surface-2/60">
+    <div className="group flex items-center gap-3 rounded-xl px-3 py-2 hover:bg-surface-2/60">
       <span className="size-3 rounded-full" style={{ backgroundColor: category.color }} />
       <input
         value={name}
@@ -497,8 +513,31 @@ function CategoryRow({
         onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         className="flex-1 bg-transparent text-[15px] focus:outline-none"
       />
+      <div
+        className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        title="Weekly target — a quiet lens in Insights, never an alarm"
+      >
+        <button
+          onClick={() => stepTarget(-1)}
+          aria-label={`Lower ${category.name} weekly target`}
+          className="grid size-6 place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-fg"
+        >
+          <Minus className="size-3" />
+        </button>
+        <span className="w-9 text-center text-[12px] font-medium tabular-nums text-muted">
+          {category.weekly_target_min > 0 ? `${category.weekly_target_min / 60}h` : "Off"}
+        </span>
+        <button
+          onClick={() => stepTarget(1)}
+          aria-label={`Raise ${category.name} weekly target`}
+          className="grid size-6 place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-fg"
+        >
+          <Plus className="size-3" />
+        </button>
+      </div>
       <button
         onClick={() => commit({ is_productive: !category.is_productive })}
+        title="Counts toward your productive % in Insights — click to flip"
         className={cn(
           "rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors",
           category.is_productive

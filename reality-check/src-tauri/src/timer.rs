@@ -209,7 +209,7 @@ fn tick(app: &AppHandle) {
     }
 }
 
-fn surface_prompt(app: &AppHandle) {
+pub(crate) fn surface_prompt(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("prompt") {
         let _ = win.show();
         let _ = win.unminimize();

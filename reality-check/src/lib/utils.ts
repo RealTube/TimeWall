@@ -74,6 +74,23 @@ export function shiftMonthISO(iso: string, months: number): string {
   return todayISO(d);
 }
 
+/** Signed duration for deltas: 90 → "+1h 30m", -45 → "−45m", 0 → "±0m". */
+export function signedDuration(min: number): string {
+  if (min === 0) return "±0m";
+  const sign = min > 0 ? "+" : "−"; // typographic minus
+  return sign + formatDuration(Math.abs(min));
+}
+
+/** The last `n` Monday-anchored weeks ending with the current one, oldest
+ *  first. Each entry is an inclusive {start, end} ISO date range. */
+export function lastNWeeks(n: number, today = todayISO()): { start: string; end: string }[] {
+  const thisMonday = startOfWeekISO(today);
+  return Array.from({ length: n }, (_, i) => {
+    const start = shiftISO(thisMonday, -7 * (n - 1 - i));
+    return { start, end: shiftISO(start, 6) };
+  });
+}
+
 /** Minutes-from-midnight → "9:00 AM" style label in the user's locale. */
 export function minutesToTimeLabel(min: number): string {
   const d = new Date();
