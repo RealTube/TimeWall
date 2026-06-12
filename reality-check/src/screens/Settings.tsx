@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileDown, Lock, Minus, Monitor, Moon, Plus, Sun, Trash2 } from "lucide-react";
+import { FileDown, FileUp, Lock, Minus, Monitor, Moon, Plus, Sun, Trash2, Vault } from "lucide-react";
 import { api } from "../lib/api";
 import { useAppStore } from "../lib/store";
 import type { AppSettings, Category, ThemePreference } from "../lib/types";
@@ -224,6 +224,8 @@ export default function Settings() {
 
       <Section title="Data">
         <ExportRow />
+        <ImportRow />
+        <BackupRow />
         <EraseRow />
       </Section>
 
@@ -441,6 +443,139 @@ function ExportRow() {
       {savedTo && (
         <p className="mt-2 truncate text-[12px] text-productive" title={savedTo}>
           Saved to {savedTo}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** CSV import (FR-18): a Hima export or the classic kitchen-timer sheet.
+ *  Merging is additive — duplicates skip, malformed rows are counted. */
+function ImportRow() {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const run = async () => {
+    if (busy) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const r = await api.importCsv();
+      if (r) {
+        const parts = [`Imported ${r.imported} entr${r.imported === 1 ? "y" : "ies"}`];
+        if (r.skipped > 0) parts.push(`${r.skipped} already here`);
+        if (r.categories_added > 0) parts.push(`${r.categories_added} new categor${r.categories_added === 1 ? "y" : "ies"}`);
+        if (r.invalid > 0) parts.push(`${r.invalid} unreadable row${r.invalid === 1 ? "" : "s"} skipped`);
+        setStatus({ ok: true, text: parts.join(" · ") });
+      }
+    } catch (e) {
+      setStatus({ ok: false, text: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl px-3 py-2.5">
+      <div className="flex items-center justify-between gap-6">
+        <div>
+          <div className="text-[15px] font-medium">Import from CSV</div>
+          <div className="mt-0.5 text-[13px] text-muted">
+            Bring in a kitchen-timer spreadsheet or a Hima export. Nothing is overwritten.
+          </div>
+        </div>
+        <button
+          disabled={busy}
+          onClick={run}
+          className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-surface-2 px-3 text-[13px] font-medium text-fg transition-colors hover:bg-border/60 disabled:opacity-50"
+        >
+          <FileUp className="size-3.5" />
+          Import…
+        </button>
+      </div>
+      {status && (
+        <p className={cn("mt-2 text-[12px]", status.ok ? "text-productive" : "text-busywork")}>
+          {status.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Encrypted backup & restore (FR-17). The passphrase is the key — the file
+ *  opens on any machine, no keychain required. Restore is additive. */
+function BackupRow() {
+  const [pass, setPass] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const ready = pass.length >= 8;
+
+  const run = async (kind: "backup" | "restore") => {
+    if (!ready || busy) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      if (kind === "backup") {
+        const path = await api.backupCreate(pass);
+        if (path) setStatus({ ok: true, text: `Backup saved to ${path}` });
+      } else {
+        const r = await api.backupRestore(pass);
+        if (r) {
+          const parts = [`Restored ${r.imported} entr${r.imported === 1 ? "y" : "ies"}`];
+          if (r.skipped > 0) parts.push(`${r.skipped} already here`);
+          if (r.categories_added > 0) parts.push(`${r.categories_added} new categor${r.categories_added === 1 ? "y" : "ies"}`);
+          setStatus({ ok: true, text: parts.join(" · ") });
+        }
+      }
+    } catch (e) {
+      setStatus({ ok: false, text: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl px-3 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <div>
+          <div className="text-[15px] font-medium">Encrypted backup</div>
+          <div className="mt-0.5 max-w-xs text-[13px] text-muted">
+            One file, locked by a passphrase — your whole audit, restorable on
+            any machine. Keep the passphrase: it is the only key.
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <input
+            type="password"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            placeholder="Passphrase (8+ chars)"
+            autoComplete="new-password"
+            className="h-9 w-44 rounded-xl bg-surface-2 px-3 text-[13px] placeholder:text-muted/60 focus:outline-none focus:ring-2 focus:ring-accent/40"
+          />
+          <button
+            disabled={!ready || busy}
+            onClick={() => run("backup")}
+            className="flex h-9 items-center gap-1.5 rounded-xl bg-surface-2 px-3 text-[13px] font-medium text-fg transition-colors hover:bg-border/60 disabled:opacity-50"
+          >
+            <Vault className="size-3.5" />
+            Back up…
+          </button>
+          <button
+            disabled={!ready || busy}
+            onClick={() => run("restore")}
+            className="h-9 rounded-xl bg-surface-2 px-3 text-[13px] font-medium text-fg transition-colors hover:bg-border/60 disabled:opacity-50"
+          >
+            Restore…
+          </button>
+        </div>
+      </div>
+      {status && (
+        <p
+          className={cn("mt-2 truncate text-[12px]", status.ok ? "text-productive" : "text-busywork")}
+          title={status.text}
+        >
+          {status.text}
         </p>
       )}
     </div>

@@ -916,6 +916,290 @@ pub fn erase_logs(conn: &Connection) -> Result<usize, String> {
         .map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Data portability — merge engine for backup restore & CSV import (FR-17/18)
+// ---------------------------------------------------------------------------
+
+/// Settings that travel in a backup. Machine state (`paused`, `paused_until`,
+/// `next_prompt_at`, `onboarded`) is deliberately absent — restoring a backup
+/// must never re-arm another machine's timer or replay its pause.
+pub const PORTABLE_SETTING_KEYS: &[&str] = &[
+    "interval_minutes",
+    "idle_threshold_min",
+    "align_to_clock",
+    "theme",
+    "notifications",
+    "sound",
+    "schedule_enabled",
+    "schedule_start_min",
+    "schedule_end_min",
+    "schedule_days",
+];
+
+/// An entry arriving from a backup or CSV. `ts` is `None` when the source has
+/// no timestamp (plain CSV) — it is then derived from the local date + time.
+pub struct IncomingEntry {
+    pub date: String,
+    pub time: String,
+    pub ts: Option<i64>,
+    pub activity: String,
+    pub category: Option<String>,
+    pub was_idle: bool,
+    pub interval_min: i64,
+}
+
+/// A category arriving from a backup, carried by name so files stay portable.
+pub struct IncomingCategory {
+    pub name: String,
+    pub color: String,
+    pub is_productive: bool,
+    pub sort_order: i64,
+    pub weekly_target_min: i64,
+}
+
+#[derive(Serialize, Default)]
+pub struct MergeOutcome {
+    pub imported: i64,
+    pub skipped: i64,
+    pub categories_added: i64,
+}
+
+/// Create categories that don't exist yet (case-insensitive by name).
+/// Existing categories keep their local config — a restore must never
+/// silently recolor or re-flag what the user already curated.
+pub fn ensure_categories(conn: &Connection, incoming: &[IncomingCategory]) -> Result<i64, String> {
+    let mut existing: HashSet<String> = list_categories(conn)?
+        .into_iter()
+        .map(|c| c.name.trim().to_lowercase())
+        .collect();
+    let mut added = 0i64;
+    for cat in incoming {
+        let key = cat.name.trim().to_lowercase();
+        if key.is_empty() || existing.contains(&key) {
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO categories (name, color, is_productive, sort_order, weekly_target_min)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                cat.name.trim(),
+                cat.color,
+                cat.is_productive as i64,
+                cat.sort_order,
+                cat.weekly_target_min.clamp(0, 6000)
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        existing.insert(key);
+        added += 1;
+    }
+    Ok(added)
+}
+
+/// Merge incoming entries additively: an entry whose (local date, time) is
+/// already present is skipped, never duplicated or overwritten — so restore
+/// and import cannot destroy anything, and re-running them is idempotent.
+/// Categories referenced by name are created on the fly (neutral color).
+///
+/// The dedupe key is deliberately the *moment*, not the text: two claims
+/// about the same second are the same interval. Keying on text instead would
+/// re-import locally-edited rows as twins and double-count their time —
+/// the worse failure under §2.2 (honest numbers).
+pub fn merge_entries(
+    conn: &Connection,
+    crypto: &Crypto,
+    entries: &[IncomingEntry],
+) -> Result<MergeOutcome, String> {
+    let mut existing: HashSet<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT date, time FROM activity_log")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        let mut set = HashSet::new();
+        for r in rows {
+            set.insert(r.map_err(|e| e.to_string())?);
+        }
+        set
+    };
+
+    let mut cat_ids: std::collections::HashMap<String, i64> = list_categories(conn)?
+        .into_iter()
+        .map(|c| (c.name.trim().to_lowercase(), c.id))
+        .collect();
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut outcome = MergeOutcome::default();
+    for entry in entries {
+        let key = (entry.date.clone(), entry.time.clone());
+        if existing.contains(&key) {
+            outcome.skipped += 1;
+            continue;
+        }
+        let category_id = match entry.category.as_deref().map(str::trim) {
+            Some(name) if !name.is_empty() => {
+                let k = name.to_lowercase();
+                match cat_ids.get(&k) {
+                    Some(id) => Some(*id),
+                    None => {
+                        tx.execute(
+                            "INSERT INTO categories (name, color, is_productive, sort_order)
+                             VALUES (?1, '#9CA3AF', 1,
+                                     (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories))",
+                            params![name],
+                        )
+                        .map_err(|e| e.to_string())?;
+                        let id = tx.last_insert_rowid();
+                        cat_ids.insert(k, id);
+                        outcome.categories_added += 1;
+                        Some(id)
+                    }
+                }
+            }
+            _ => None,
+        };
+        let ts = entry
+            .ts
+            .unwrap_or_else(|| derive_ts(&entry.date, &entry.time));
+        let enc = crypto.encrypt(&entry.activity)?;
+        tx.execute(
+            "INSERT INTO activity_log
+                (date, time, logged_at_ts, activity_enc, category_id, was_idle, interval_min)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                entry.date,
+                entry.time,
+                ts,
+                enc,
+                category_id,
+                entry.was_idle as i64,
+                entry.interval_min.clamp(1, 240)
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        existing.insert(key);
+        outcome.imported += 1;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(outcome)
+}
+
+/// Best-effort unix timestamp for an imported local date + time. DST gaps and
+/// overlaps resolve to the earliest valid instant; an unparseable pair (which
+/// validation upstream should prevent) falls back to interpreting it as UTC.
+fn derive_ts(date: &str, time: &str) -> i64 {
+    use chrono::TimeZone;
+    let Ok(d) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") else {
+        return 0;
+    };
+    let t = chrono::NaiveTime::parse_from_str(time, "%H:%M:%S")
+        .unwrap_or_else(|_| chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap());
+    let ndt = d.and_time(t);
+    Local
+        .from_local_datetime(&ndt)
+        .earliest()
+        .map(|dt| dt.timestamp())
+        .unwrap_or_else(|| ndt.and_utc().timestamp())
+}
+
+/// Every entry, decrypted and category-resolved by name, oldest first — the
+/// content of a backup file.
+pub fn all_entries_for_backup(
+    conn: &Connection,
+    crypto: &Crypto,
+) -> Result<Vec<IncomingEntry>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.date, a.time, a.logged_at_ts, a.activity_enc, c.name,
+                    a.was_idle, a.interval_min
+             FROM activity_log a
+             LEFT JOIN categories c ON a.category_id = c.id
+             ORDER BY a.logged_at_ts, a.id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, i64>(5)? != 0,
+                r.get::<_, i64>(6)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        let (date, time, ts, enc, category, was_idle, interval_min) =
+            r.map_err(|e| e.to_string())?;
+        out.push(IncomingEntry {
+            date,
+            time,
+            ts: Some(ts),
+            activity: crypto.decrypt(&enc).unwrap_or_else(|_| "—".to_string()),
+            category,
+            was_idle,
+            interval_min,
+        });
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Answer rate (FR-20) — how much of the record came from answered prompts
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct AnswerStats {
+    pub answered: i64,
+    pub missed: i64,
+    pub away: i64,
+}
+
+/// Split a range's intervals into answered check-ins, missed prompts, and
+/// away time. Missed vs away requires reading the (encrypted) label, so the
+/// decrypt pass runs over idle rows only.
+pub fn answer_stats(
+    conn: &Connection,
+    crypto: &Crypto,
+    start: &str,
+    end: &str,
+) -> Result<AnswerStats, String> {
+    let answered: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM activity_log WHERE date BETWEEN ?1 AND ?2 AND was_idle = 0",
+            [start, end],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT activity_enc FROM activity_log
+             WHERE date BETWEEN ?1 AND ?2 AND was_idle = 1",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([start, end], |r| r.get::<_, Vec<u8>>(0))
+        .map_err(|e| e.to_string())?;
+    let (mut missed, mut away) = (0i64, 0i64);
+    for r in rows {
+        let enc = r.map_err(|e| e.to_string())?;
+        match crypto.decrypt(&enc) {
+            Ok(text) if text == MISSED_LABEL => missed += 1,
+            _ => away += 1,
+        }
+    }
+    Ok(AnswerStats {
+        answered,
+        missed,
+        away,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1136,6 +1420,156 @@ mod tests {
         let hits = search_entries(&conn, &crypto, "task", 3).unwrap();
         assert_eq!(hits.len(), 3);
         assert_eq!(hits[0].activity, "task 4"); // newest first
+    }
+
+    fn incoming(date: &str, time: &str, activity: &str, category: Option<&str>) -> IncomingEntry {
+        IncomingEntry {
+            date: date.into(),
+            time: time.into(),
+            ts: None,
+            activity: activity.into(),
+            category: category.map(Into::into),
+            was_idle: false,
+            interval_min: 15,
+        }
+    }
+
+    #[test]
+    fn merge_skips_existing_datetimes_and_is_idempotent() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        insert_activity(&conn, &crypto, "already here", None, false, 15).unwrap();
+        let logs = logs_for_date(&conn, &crypto, &today()).unwrap();
+        let (d, t) = (today(), logs[0].time.clone());
+
+        let batch = vec![
+            incoming(&d, &t, "collides with existing", None),
+            incoming("2026-01-05", "09:15:00", "new entry", None),
+        ];
+        let one = merge_entries(&conn, &crypto, &batch).unwrap();
+        assert_eq!((one.imported, one.skipped), (1, 1));
+        // Re-running the same batch imports nothing more.
+        let two = merge_entries(&conn, &crypto, &batch).unwrap();
+        assert_eq!((two.imported, two.skipped), (0, 2));
+        // The existing row was not overwritten.
+        let logs = logs_for_date(&conn, &crypto, &d).unwrap();
+        assert_eq!(logs[0].activity, "already here");
+    }
+
+    #[test]
+    fn merge_maps_categories_case_insensitively_and_creates_missing() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        let deep = list_categories(&conn).unwrap()[0].clone();
+        let batch = vec![
+            incoming("2026-01-05", "09:15:00", "spec", Some("DEEP WORK")),
+            incoming("2026-01-05", "09:30:00", "thesis", Some("Research")),
+            incoming("2026-01-05", "09:45:00", "thesis again", Some("research")),
+        ];
+        let out = merge_entries(&conn, &crypto, &batch).unwrap();
+        assert_eq!(out.imported, 3);
+        assert_eq!(out.categories_added, 1); // "Research" created once
+        let logs = logs_for_date(&conn, &crypto, "2026-01-05").unwrap();
+        let spec = logs.iter().find(|l| l.activity == "spec").unwrap();
+        assert_eq!(spec.category_id, Some(deep.id)); // matched, not duplicated
+    }
+
+    #[test]
+    fn merge_dedupes_within_a_single_batch() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        let batch = vec![
+            incoming("2026-01-05", "09:15:00", "first wins", None),
+            incoming("2026-01-05", "09:15:00", "duplicate", None),
+        ];
+        let out = merge_entries(&conn, &crypto, &batch).unwrap();
+        assert_eq!((out.imported, out.skipped), (1, 1));
+    }
+
+    #[test]
+    fn ensure_categories_adds_only_missing_and_keeps_local_config() {
+        let conn = mem();
+        let before = list_categories(&conn).unwrap();
+        let added = ensure_categories(
+            &conn,
+            &[
+                IncomingCategory {
+                    name: "deep work".into(), // exists (case-insensitive)
+                    color: "#000000".into(),
+                    is_productive: false,
+                    sort_order: 99,
+                    weekly_target_min: 60,
+                },
+                IncomingCategory {
+                    name: "Research".into(), // new
+                    color: "#F472B6".into(),
+                    is_productive: true,
+                    sort_order: 10,
+                    weekly_target_min: 300,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(added, 1);
+        let after = list_categories(&conn).unwrap();
+        assert_eq!(after.len(), before.len() + 1);
+        let deep = after.iter().find(|c| c.name == "Deep Work").unwrap();
+        assert_eq!(deep.color, before[0].color); // local config untouched
+        let research = after.iter().find(|c| c.name == "Research").unwrap();
+        assert_eq!(research.weekly_target_min, 300);
+    }
+
+    #[test]
+    fn backup_entries_round_trip_through_merge() {
+        let source = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        let cats = list_categories(&source).unwrap();
+        let seed = vec![
+            IncomingEntry {
+                date: "2026-06-11".into(),
+                time: "09:15:00".into(),
+                ts: None,
+                activity: "spec".into(),
+                category: Some(cats[0].name.clone()),
+                was_idle: false,
+                interval_min: 15,
+            },
+            IncomingEntry {
+                date: "2026-06-11".into(),
+                time: "09:30:00".into(),
+                ts: None,
+                activity: IDLE_LABEL.into(),
+                category: None,
+                was_idle: true,
+                interval_min: 15,
+            },
+        ];
+        merge_entries(&source, &crypto, &seed).unwrap();
+
+        let entries = all_entries_for_backup(&source, &crypto).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].category.as_deref(), Some(cats[0].name.as_str()));
+        assert!(entries.iter().all(|e| e.ts.is_some_and(|t| t > 0)));
+
+        let target = mem();
+        let out = merge_entries(&target, &crypto, &entries).unwrap();
+        assert_eq!(out.imported, 2);
+        let logs = logs_for_date(&target, &crypto, "2026-06-11").unwrap();
+        assert_eq!(logs.len(), 2);
+        assert!(logs.iter().any(|l| l.activity == "spec" && !l.was_idle));
+        assert!(logs.iter().any(|l| l.activity == IDLE_LABEL && l.was_idle));
+    }
+
+    #[test]
+    fn answer_stats_split_answered_missed_away() {
+        let conn = mem();
+        let crypto = crate::crypto::Crypto::test_fixed();
+        insert_activity(&conn, &crypto, "work", None, false, 15).unwrap();
+        insert_activity(&conn, &crypto, "more work", None, false, 15).unwrap();
+        insert_activity(&conn, &crypto, MISSED_LABEL, None, true, 15).unwrap();
+        insert_activity(&conn, &crypto, IDLE_LABEL, None, true, 15).unwrap();
+        let s = answer_stats(&conn, &crypto, &today(), &today()).unwrap();
+        assert_eq!((s.answered, s.missed, s.away), (2, 1, 1));
     }
 
     #[test]

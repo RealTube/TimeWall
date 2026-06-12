@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import type { ActivityLog, AppSettings, Category } from "../lib/types";
 import { countdownLabel, formatDuration, greeting, MISSED_LABEL, secondsUntil } from "../lib/utils";
 import { LogRow } from "../components/LogRow";
+import { GhostInput } from "../components/ui/GhostInput";
 import { ProgressRing } from "../components/ui/ProgressRing";
 
 const WORKDAY_MIN = 8 * 60;
@@ -177,10 +178,15 @@ export default function Dashboard() {
 
 /** Log between prompts (FR-10): one line + Enter, same rules as the prompt.
  *  Categories come back on their own — Hima remembers the last one you gave
- *  the same words (FR-11). */
+ *  the same words (FR-11) — and recent entries ghost-complete (FR-21). */
 function QuickLog({ onLogged }: { onLogged: () => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [recent, setRecent] = useState<string[]>([]);
+
+  useEffect(() => {
+    api.recent(24).then(setRecent).catch(() => {});
+  }, []);
 
   const submit = async () => {
     const value = text.trim();
@@ -190,6 +196,7 @@ function QuickLog({ onLogged }: { onLogged: () => void }) {
       await api.log(value);
       setText("");
       onLogged();
+      api.recent(24).then(setRecent).catch(() => {});
     } catch (e) {
       console.error("quick log failed", e);
     } finally {
@@ -206,14 +213,12 @@ function QuickLog({ onLogged }: { onLogged: () => void }) {
       className="mb-3 flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-1 shadow-soft transition-colors focus-within:border-accent/50"
     >
       <Plus className="size-4 shrink-0 text-muted" />
-      <input
+      <GhostInput
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={setText}
+        recent={recent}
         placeholder="Just did something? Log it now…"
-        autoComplete="off"
-        spellCheck={false}
-        maxLength={200}
-        className="h-11 w-full bg-transparent text-[15px] placeholder:text-muted/50 focus:outline-none"
+        className="h-11 w-full text-[15px] placeholder:text-muted/50 focus:outline-none"
       />
       {text.trim() && (
         <kbd className="grid size-6 shrink-0 place-items-center rounded-md bg-surface-2 text-muted">

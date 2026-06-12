@@ -3,6 +3,7 @@
 
 import type {
   ActivityLog,
+  AnswerStats,
   AppSettings,
   Category,
   CategorySlice,
@@ -76,6 +77,8 @@ const focus: FocusStats = {
 };
 
 const streaks: Streaks = { current: 12, best: 15, days_logged: 38 };
+
+const answerStats: AnswerStats = { answered: 148, missed: 9, away: 26 };
 
 function heatmap(): HeatCell[] {
   // A believable shape: deep mornings, meeting-heavy early afternoons.
@@ -152,9 +155,13 @@ export function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     get_focus_stats: focus,
     get_streaks: streaks,
     search_entries: searchHits((args?.query as string) ?? ""),
+    get_answer_stats: answerStats,
     export_csv: "C:/Users/dev/Downloads/hima-export.csv",
     save_report: "C:/Users/dev/Downloads/hima-report.md",
     erase_all_entries: logs.length,
+    backup_create: "C:/Users/dev/Downloads/hima-backup.himabackup",
+    backup_restore: { imported: 1240, skipped: 12, categories_added: 1 },
+    import_csv: { imported: 86, skipped: 3, categories_added: 2, invalid: 1 },
   };
   return Promise.resolve((value[cmd] ?? null) as T);
 }

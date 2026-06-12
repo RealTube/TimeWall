@@ -8,10 +8,12 @@ import {
   ChevronLeft,
   ChevronRight,
   FileDown,
+  Sparkles,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type {
   ActivityLog,
+  AnswerStats,
   Category,
   CategorySlice,
   DayTotal,
@@ -23,20 +25,22 @@ import type {
 import {
   cn,
   endOfMonthISO,
+  endOfYearISO,
   formatDuration,
   hoursDecimal,
   lastNWeeks,
   shiftISO,
   shiftMonthISO,
+  shiftYearISO,
   signedDuration,
   startOfMonthISO,
   startOfWeekISO,
+  startOfYearISO,
   todayISO,
 } from "../lib/utils";
+import { buildFindings, type Period } from "../lib/findings";
 import { LogRow } from "../components/LogRow";
 import { ProgressRing } from "../components/ui/ProgressRing";
-
-type Period = "week" | "month";
 
 interface WeekPoint {
   start: string;
@@ -56,6 +60,8 @@ export default function Insights() {
   const [top, setTop] = useState<TopActivity[]>([]);
   const [prevTop, setPrevTop] = useState<TopActivity[]>([]);
   const [focus, setFocus] = useState<FocusStats | null>(null);
+  const [prevFocus, setPrevFocus] = useState<FocusStats | null>(null);
+  const [answer, setAnswer] = useState<AnswerStats | null>(null);
   const [streaks, setStreaks] = useState<Streaks | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [trend, setTrend] = useState<WeekPoint[]>([]);
@@ -63,12 +69,22 @@ export default function Insights() {
   const [savedTo, setSavedTo] = useState<string | null>(null);
   const location = useLocation();
 
-  const start = period === "week" ? anchor : startOfMonthISO(anchor);
-  const end = period === "week" ? shiftISO(anchor, 6) : endOfMonthISO(anchor);
+  const start =
+    period === "week" ? anchor : period === "month" ? startOfMonthISO(anchor) : startOfYearISO(anchor);
+  const end =
+    period === "week" ? shiftISO(anchor, 6) : period === "month" ? endOfMonthISO(anchor) : endOfYearISO(anchor);
   const prevStart =
-    period === "week" ? shiftISO(start, -7) : startOfMonthISO(shiftMonthISO(start, -1));
+    period === "week"
+      ? shiftISO(start, -7)
+      : period === "month"
+        ? startOfMonthISO(shiftMonthISO(start, -1))
+        : shiftYearISO(start, -1);
   const prevEnd =
-    period === "week" ? shiftISO(start, -1) : endOfMonthISO(shiftMonthISO(start, -1));
+    period === "week"
+      ? shiftISO(start, -1)
+      : period === "month"
+        ? endOfMonthISO(shiftMonthISO(start, -1))
+        : endOfYearISO(shiftYearISO(start, -1));
 
   const load = useCallback(() => {
     api.dayTotals(start, end).then(setDays).catch(() => {});
@@ -76,8 +92,10 @@ export default function Insights() {
     api.hourlyHeatmap(start, end).then(setHeat).catch(() => {});
     api.topActivities(start, end, 50).then(setTop).catch(() => {});
     api.focusStats(start, end).then(setFocus).catch(() => {});
+    api.answerStats(start, end).then(setAnswer).catch(() => {});
     api.dayTotals(prevStart, prevEnd).then(setPrevDays).catch(() => {});
     api.topActivities(prevStart, prevEnd, 50).then(setPrevTop).catch(() => {});
+    api.focusStats(prevStart, prevEnd).then(setPrevFocus).catch(() => {});
   }, [start, end, prevStart, prevEnd]);
 
   useEffect(() => {
@@ -129,17 +147,31 @@ export default function Insights() {
 
   const switchPeriod = (p: Period) => {
     setPeriod(p);
-    setAnchor(p === "week" ? startOfWeekISO(todayISO()) : startOfMonthISO(todayISO()));
+    setAnchor(
+      p === "week"
+        ? startOfWeekISO(todayISO())
+        : p === "month"
+          ? startOfMonthISO(todayISO())
+          : startOfYearISO(todayISO()),
+    );
   };
 
   const navigate = (dir: -1 | 1) => {
-    setAnchor(period === "week" ? shiftISO(anchor, dir * 7) : shiftMonthISO(anchor, dir));
+    setAnchor(
+      period === "week"
+        ? shiftISO(anchor, dir * 7)
+        : period === "month"
+          ? shiftMonthISO(anchor, dir)
+          : shiftYearISO(anchor, dir),
+    );
   };
 
   const isCurrent =
     period === "week"
       ? anchor === startOfWeekISO(todayISO())
-      : startOfMonthISO(anchor) === startOfMonthISO(todayISO());
+      : period === "month"
+        ? startOfMonthISO(anchor) === startOfMonthISO(todayISO())
+        : anchor.slice(0, 4) === todayISO().slice(0, 4);
 
   const byDate = useMemo(() => {
     const m = new Map<string, DayTotal>();
@@ -149,9 +181,10 @@ export default function Insights() {
 
   // Dense day list across the whole period, including empty days.
   const allDays = useMemo(() => {
+    const cap = period === "year" ? 366 : 62;
     const out: DayTotal[] = [];
     let d = start;
-    while (d <= end && out.length < 62) {
+    while (d <= end && out.length < cap) {
       out.push(
         byDate.get(d) ?? {
           date: d,
@@ -163,7 +196,7 @@ export default function Insights() {
       d = shiftISO(d, 1);
     }
     return out;
-  }, [start, end, byDate]);
+  }, [start, end, byDate, period]);
 
   const workedTotal = allDays.reduce((a, d) => a + d.worked_minutes, 0);
   const idleTotal = allDays.reduce((a, d) => a + d.idle_minutes, 0);
@@ -189,10 +222,17 @@ export default function Insights() {
   const rangeLabel =
     period === "week"
       ? `${fmtDay(start)} – ${fmtDay(end)}`
-      : new Date(`${start}T00:00:00`).toLocaleDateString(undefined, {
-          month: "long",
-          year: "numeric",
-        });
+      : period === "month"
+        ? new Date(`${start}T00:00:00`).toLocaleDateString(undefined, {
+            month: "long",
+            year: "numeric",
+          })
+        : start.slice(0, 4);
+
+  const findings = useMemo(
+    () => buildFindings({ period, heat, focus, prevFocus, answer, days: allDays }),
+    [period, heat, focus, prevFocus, answer, allDays],
+  );
 
   const saveReport = async () => {
     setSavedTo(null);
@@ -226,7 +266,7 @@ export default function Insights() {
 
         <div className="flex items-center gap-2">
           <div className="flex gap-1 rounded-xl bg-surface-2 p-1">
-            {(["week", "month"] as const).map((p) => (
+            {(["week", "month", "year"] as const).map((p) => (
               <button
                 key={p}
                 onClick={() => switchPeriod(p)}
@@ -309,17 +349,46 @@ export default function Insights() {
         </ProgressRing>
       </section>
 
-      {/* Daily bars — "which days leaked?" Click a bar to open the day. */}
-      <Card title="Daily hours" hint="Click a day to see its full log.">
-        <DayBars
-          days={allDays}
-          compact={period === "month"}
-          selected={selectedDay}
-          onSelect={(d) => setSelectedDay(selectedDay === d ? null : d)}
-        />
-      </Card>
+      {/* Findings — the period's patterns, said out loud (FR-20). */}
+      {findings.length > 0 && (
+        <Card title="What stands out" hint="Computed on-device from your own entries.">
+          <ul className="flex flex-col gap-3">
+            {findings.map((f) => (
+              <li key={f.kind} className="flex items-start gap-2.5">
+                <span className="grid size-6 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted">
+                  <Sparkles className="size-3.5" />
+                </span>
+                <span className="text-[14px] leading-6">{f.text}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
-      {selectedDay && <DayDetail date={selectedDay} />}
+      {/* Daily bars / year mosaic — "which days leaked?" / "what did my year look like?" */}
+      {period === "year" ? (
+        <Card title="Your year" hint="Each cell is a day — click one to open its week.">
+          <YearPixels
+            days={allDays}
+            onSelect={(d) => {
+              setPeriod("week");
+              setAnchor(startOfWeekISO(d));
+              setSelectedDay(d);
+            }}
+          />
+        </Card>
+      ) : (
+        <Card title="Daily hours" hint="Click a day to see its full log.">
+          <DayBars
+            days={allDays}
+            compact={period === "month"}
+            selected={selectedDay}
+            onSelect={(d) => setSelectedDay(selectedDay === d ? null : d)}
+          />
+        </Card>
+      )}
+
+      {selectedDay && period !== "year" && <DayDetail date={selectedDay} />}
 
       {/* Trend — "is it getting better?" */}
       <Card title="Last 8 weeks" hint="Worked and productive hours per week.">
@@ -391,7 +460,8 @@ function CompareLine({
   prevProductive: number;
 }) {
   if (worked === 0 && prevWorked === 0) return null;
-  const label = period === "week" ? "last week" : "last month";
+  const label =
+    period === "week" ? "last week" : period === "month" ? "last month" : "last year";
   if (prevWorked === 0) {
     return (
       <p className="mt-1.5 text-[13px] text-muted/90">
@@ -510,6 +580,76 @@ function DayBars({
         );
       })}
     </svg>
+  );
+}
+
+// --- Year in pixels (FR-19) ----------------------------------------------------
+
+/** GitHub-contribution layout: columns are calendar weeks, rows Mon–Sun.
+ *  Intensity is the day's worked time; the mosaic is a door, not a poster —
+ *  clicking a day opens its week with the journal expanded. */
+function YearPixels({ days, onSelect }: { days: DayTotal[]; onSelect: (date: string) => void }) {
+  const today = todayISO();
+  const max = Math.max(60, ...days.map((d) => d.worked_minutes));
+
+  // Pad the front so each column starts on Monday.
+  const offset = (new Date(`${days[0].date}T00:00:00`).getDay() + 6) % 7;
+  const cells: (DayTotal | null)[] = [...Array<null>(offset).fill(null), ...days];
+  const weeks: (DayTotal | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+
+  // Label the column that contains the 1st of each month.
+  const monthOf = (week: (DayTotal | null)[]) => {
+    const first = week.find((d) => d?.date.endsWith("-01"));
+    return first
+      ? new Date(`${first.date}T00:00:00`).toLocaleDateString(undefined, { month: "short" })
+      : "";
+  };
+
+  return (
+    <div className="overflow-x-auto">
+      <div className="flex min-w-[620px] gap-[3px]">
+        {weeks.map((week, i) => (
+          <div key={i} className="flex min-w-0 flex-1 flex-col gap-[3px]">
+            <span className="h-4 overflow-visible whitespace-nowrap text-[9px] text-muted">
+              {monthOf(week)}
+            </span>
+            {Array.from({ length: 7 }, (_, r) => {
+              const d = week[r] ?? null;
+              if (!d) return <span key={r} className="aspect-square" />;
+              const future = d.date > today;
+              return (
+                <button
+                  key={r}
+                  disabled={future}
+                  onClick={() => onSelect(d.date)}
+                  aria-label={`Open ${d.date}`}
+                  title={
+                    future
+                      ? undefined
+                      : `${fmtDay(d.date)} — ${formatDuration(d.worked_minutes)} worked` +
+                        (d.productive_minutes > 0
+                          ? `, ${formatDuration(d.productive_minutes)} productive`
+                          : "")
+                  }
+                  className={cn(
+                    "aspect-square rounded-[3px] bg-surface-2 p-0",
+                    future ? "opacity-40" : "transition-transform hover:scale-125",
+                  )}
+                >
+                  {d.worked_minutes > 0 && (
+                    <span
+                      className="block h-full w-full rounded-[3px] bg-accent"
+                      style={{ opacity: 0.2 + 0.8 * (d.worked_minutes / max) }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -883,15 +1023,38 @@ function buildReport(input: {
         `${focus.switches_per_day.toFixed(1)} switches/day`,
     );
   }
-  L.push("", "## Days", "", "| Day | Worked | Productive | Away |", "|---|---|---|---|");
-  days.forEach((d) => {
-    if (d.worked_minutes === 0 && d.idle_minutes === 0) return;
-    L.push(
-      `| ${fmtDay(d.date)} | ${formatDuration(d.worked_minutes)} | ${formatDuration(
-        d.productive_minutes,
-      )} | ${formatDuration(d.idle_minutes)} |`,
-    );
-  });
+  if (period === "year") {
+    // 366 day rows would bury the reader — a year reports by month.
+    const byMonth = new Map<string, { worked: number; productive: number; idle: number }>();
+    days.forEach((d) => {
+      const key = d.date.slice(0, 7);
+      const m = byMonth.get(key) ?? { worked: 0, productive: 0, idle: 0 };
+      m.worked += d.worked_minutes;
+      m.productive += d.productive_minutes ?? 0;
+      m.idle += d.idle_minutes;
+      byMonth.set(key, m);
+    });
+    L.push("", "## Months", "", "| Month | Worked | Productive | Away |", "|---|---|---|---|");
+    byMonth.forEach((m, key) => {
+      if (m.worked === 0 && m.idle === 0) return;
+      const label = new Date(`${key}-01T00:00:00`).toLocaleDateString(undefined, {
+        month: "long",
+      });
+      L.push(
+        `| ${label} | ${formatDuration(m.worked)} | ${formatDuration(m.productive)} | ${formatDuration(m.idle)} |`,
+      );
+    });
+  } else {
+    L.push("", "## Days", "", "| Day | Worked | Productive | Away |", "|---|---|---|---|");
+    days.forEach((d) => {
+      if (d.worked_minutes === 0 && d.idle_minutes === 0) return;
+      L.push(
+        `| ${fmtDay(d.date)} | ${formatDuration(d.worked_minutes)} | ${formatDuration(
+          d.productive_minutes,
+        )} | ${formatDuration(d.idle_minutes)} |`,
+      );
+    });
+  }
   if (top.length > 0) {
     L.push("", "## Top activities", "", "| # | Activity | Time | Share |", "|---|---|---|---|");
     top.forEach((t, i) => {

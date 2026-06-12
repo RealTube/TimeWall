@@ -3,6 +3,7 @@
 //! can actually trust. This module wires the plugins, encrypted store, tray, and
 //! scheduler together.
 
+mod backup;
 mod commands;
 mod crypto;
 mod db;
@@ -75,6 +76,10 @@ pub fn run() {
             commands::export_csv,
             commands::save_report,
             commands::erase_all_entries,
+            commands::backup_create,
+            commands::backup_restore,
+            commands::import_csv,
+            commands::get_answer_stats,
             commands::set_autostart,
             commands::get_autostart,
         ])

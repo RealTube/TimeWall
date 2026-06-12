@@ -12,6 +12,7 @@ IPC boundary. Nothing talks to the network.
 ┌───────┴───────────────  Rust core (src-tauri)  ─────────┴────────┐
 │  crypto.rs ──── XChaCha20-Poly1305 seal/open of activity text    │
 │  db.rs ──────── SQLite (WAL) · migrations · CRUD · aggregations  │
+│  backup.rs ──── encrypted backup format · CSV parsing (portable) │
 │  timer.rs ───── 5 s tick · wall-clock target · idle · schedule   │
 │  commands.rs ── validated IPC commands (the only API surface)    │
 │  tray.rs ────── tray icon/menu · lib.rs: plugins & lifecycle     │
@@ -101,6 +102,29 @@ Design notes:
   result limit; the query string never touches disk. **Streaks (FR-13)** read
   only `DISTINCT date` (indexed) and run through the pure, unit-tested
   `streaks_from_dates`.
+- **Merge engine (FR-17/18)**: backup restore and CSV import share
+  `merge_entries`, which is additive and idempotent — the dedupe key is the
+  *moment* `(date, time)`, deliberately not the text: keying on text would
+  re-import locally-edited rows as twins and double-count their time (§2.2).
+  Categories resolve by case-insensitive name and are created when missing;
+  the whole merge runs in one transaction. `answer_stats` splits a range into
+  answered / missed / away (decrypting idle rows only) for the Findings card.
+
+## Backup & import (backup.rs)
+
+The data-portability module is pure (no Tauri types) and fully unit-tested:
+
+- **Backup file**: `HIMABKP1 ‖ salt(16) ‖ nonce(24) ‖ AEAD(JSON payload)`.
+  The key is Argon2id(passphrase, salt) — independent of the OS keychain, so
+  a backup outlives the machine. Payload carries entries (categories by
+  *name*, so ids never need to match), category definitions, and the
+  allow-listed portable settings (`db::PORTABLE_SETTING_KEYS`).
+- **CSV parsing**: header-driven (case-insensitive), BOM-tolerant, RFC 4180
+  via the `csv` crate. `date`/`time`/`activity` required; `category`,
+  `was_away`, `interval_minutes` honored — Hima's own export round-trips.
+  Invalid rows are counted and skipped, never guessed at.
+- Commands (`backup_create`, `backup_restore`, `import_csv`) own the native
+  dialogs and the DB lock; the format itself never touches Tauri.
 
 ## Encryption (crypto.rs)
 
@@ -121,8 +145,8 @@ Highlights (full list in `lib.rs::generate_handler!`):
 | Logging | `log_activity` (infers a remembered category when none is given), `get_todays_logs`, `get_logs_for_date`, `get_recent_activities`, `update_activity`, `delete_activity` |
 | Scheduling | `get_settings`, `set_interval`, `update_setting` (allow-list + per-key validation), `set_pause`, `pause_for`, `snooze`, `get_next_prompt_at` |
 | Categories | `list_categories`, `add_category`, `update_category` (incl. weekly target, range-checked), `delete_category` |
-| Insights | `get_day_totals` (worked/away/productive), `get_category_breakdown`, `get_hourly_heatmap`, `get_top_activities`, `get_focus_stats`, `search_entries`, `get_streaks` |
-| Data | `export_csv` (native save dialog, BOM, RFC 4180 escaping), `save_report` (native save dialog, size-capped Markdown), `erase_all_entries` |
+| Insights | `get_day_totals` (worked/away/productive), `get_category_breakdown`, `get_hourly_heatmap`, `get_top_activities`, `get_focus_stats`, `search_entries`, `get_streaks`, `get_answer_stats` |
+| Data | `export_csv` (native save dialog, BOM, RFC 4180 escaping), `save_report` (native save dialog, size-capped Markdown), `erase_all_entries`, `backup_create` / `backup_restore` (passphrase-encrypted, additive merge), `import_csv` (additive merge + invalid-row count) |
 | System | `set_autostart`, `get_autostart` |
 
 The tray's "Check in now" (FR-10) is not an IPC command at all — it lives in
@@ -162,10 +186,11 @@ a `refresh-dashboard` event so all open views stay live.
 | Layer | What is tested | Where |
 |---|---|---|
 | Scheduler | fire/re-arm decisions, alignment, sleep-gap, schedule windows (incl. overnight, malformed CSV) | `timer.rs` |
-| Crypto | round-trip, nonce uniqueness, tamper rejection | `crypto.rs` |
-| Store | migrations & seeds (incl. v3 targets), upserts, totals split (worked/away/productive), heatmap, top-activity grouping, focus blocks/switches, category memory, search (matching, limits, idle exclusion), streak runs, export rows, erase | `db.rs` |
+| Crypto | round-trip, nonce uniqueness, tamper rejection, key-based cipher mismatch | `crypto.rs` |
+| Backup format | seal/open round-trip, ciphertext opacity, wrong-passphrase & tamper rejection, CSV header/row validation, export round-trip, quoted fields | `backup.rs` |
+| Store | migrations & seeds (incl. v3 targets), upserts, totals split (worked/away/productive), heatmap, top-activity grouping, focus blocks/switches, category memory, search (matching, limits, idle exclusion), streak runs, export rows, erase, merge dedupe/idempotency, category mapping & creation, answer-rate split | `db.rs` |
 | Commands | CSV escaping, setting validation | `commands.rs` |
-| Frontend | duration/date math, week/month anchors, signed deltas, trend week-bucketing ranges, countdowns | `src/lib/utils.test.ts` (Vitest) |
+| Frontend | duration/date math, week/month/year anchors, signed deltas, trend week-bucketing ranges, countdowns, findings rules & confidence floors, ghost-completion matching | `src/lib/*.test.ts` (Vitest) |
 
 CI (`.github/workflows/ci.yml`) runs typecheck, Vitest, the production build,
 `cargo fmt --check`, `clippy -D warnings`, and `cargo test` on every push/PR.

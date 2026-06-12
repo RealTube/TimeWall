@@ -4,6 +4,40 @@ All notable changes to Hima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-06-12
+
+"The Long Game" release: the audit becomes durable — backup, restore, import —
+and long-sighted — the year view, plain-language findings — while the prompt
+gets cheaper. Scoped in [PRD §12](docs/PRD.md#12-hima-12--the-long-game).
+
+### Added
+- **Encrypted backup & restore** — your whole audit (entries, categories,
+  portable settings) in one file, sealed with a passphrase (Argon2id +
+  XChaCha20-Poly1305). No keychain required to read it back: a backup
+  survives a dead disk or a new machine. Restore merges additively —
+  duplicates skip, local category config wins, nothing is ever overwritten.
+- **CSV import** — bring in the original kitchen-timer spreadsheet or a Hima
+  export (which now round-trips losslessly). Honest tally afterwards:
+  imported, already-present, unreadable rows.
+- **The year view** — a third period in Insights with a year-in-pixels
+  mosaic: every day a cell, intensity = worked time, click a day to open its
+  week and journal. Year reports summarize by month.
+- **What stands out** — up to three deterministic, plain-language findings
+  per period: your heaviest hour and fullest weekday, focus blocks up/down
+  vs the previous period, your answer rate (flagged when it undercuts the
+  totals), your most productive weekday. Computed on-device from your own
+  entries; silent below confidence floors.
+- **Ghost autocomplete** — type two characters in the prompt (or the quick
+  log) and the rest of your most recent matching entry appears inline; Tab
+  accepts. "standup" is now three keystrokes. Prefix-only, never fuzzy.
+- **Answer-rate tracking** — answered vs missed vs away intervals per period
+  (`get_answer_stats`), the ESM data-quality metric behind the findings.
+
+### Changed
+- Insights now also loads the previous period's focus profile (for the focus
+  finding) — same indexed queries, no new schema.
+- Versions aligned to 1.2.0; schema stays at v3 (no migration needed).
+
 ## [1.1.0] — 2026-06-10
 
 "The Ritual" release: the data you already collect becomes a weekly review —

@@ -564,6 +564,231 @@ pub fn erase_all_entries(app: AppHandle, state: State<AppState>) -> Result<usize
     Ok(deleted)
 }
 
+// --- Backup, restore & import (FR-17/18) -------------------------------------
+
+const MIN_PASSPHRASE_CHARS: usize = 8;
+
+fn check_passphrase(passphrase: &str) -> Result<(), String> {
+    if passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
+        return Err("Passphrase must be at least 8 characters".into());
+    }
+    Ok(())
+}
+
+/// Write the entire audit — entries, categories, portable settings — into one
+/// passphrase-encrypted file (FR-17.1). The OS keychain is not involved, so
+/// the file is readable on any machine that knows the passphrase.
+#[tauri::command]
+pub fn backup_create(
+    app: AppHandle,
+    state: State<AppState>,
+    passphrase: String,
+) -> Result<Option<String>, String> {
+    check_passphrase(&passphrase)?;
+
+    let default_name = format!(
+        "hima-backup-{}.himabackup",
+        chrono::Local::now().format("%Y-%m-%d")
+    );
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .set_file_name(&default_name)
+        .add_filter("Hima backup", &["himabackup"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| format!("invalid path: {e}"))?;
+
+    let payload = {
+        let conn = lock(&state)?;
+        let entries = db::all_entries_for_backup(&conn, &state.crypto)?
+            .into_iter()
+            .map(|e| crate::backup::BackupEntry {
+                date: e.date,
+                time: e.time,
+                ts: e.ts.unwrap_or(0),
+                activity: e.activity,
+                category: e.category,
+                was_idle: e.was_idle,
+                interval_min: e.interval_min,
+            })
+            .collect();
+        let categories = db::list_categories(&conn)?
+            .into_iter()
+            .map(|c| crate::backup::BackupCategory {
+                name: c.name,
+                color: c.color,
+                is_productive: c.is_productive,
+                sort_order: c.sort_order,
+                weekly_target_min: c.weekly_target_min,
+            })
+            .collect();
+        let settings = db::PORTABLE_SETTING_KEYS
+            .iter()
+            .map(|k| (k.to_string(), db::get_setting_or(&conn, k, "")))
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
+        crate::backup::BackupPayload {
+            format: 1,
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            exported_at: Utc::now().to_rfc3339(),
+            categories,
+            entries,
+            settings,
+        }
+    };
+
+    let sealed = crate::backup::seal(&payload, &passphrase)?;
+    std::fs::write(&path, sealed).map_err(|e| format!("could not write file: {e}"))?;
+    Ok(Some(path.display().to_string()))
+}
+
+/// Open a backup file and merge it into the local store (FR-17.2). Additive
+/// by construction: existing (date, time) rows are skipped, categories are
+/// matched by name, local category config wins. Returns `None` on cancel.
+#[tauri::command]
+pub fn backup_restore(
+    app: AppHandle,
+    state: State<AppState>,
+    passphrase: String,
+) -> Result<Option<db::MergeOutcome>, String> {
+    check_passphrase(&passphrase)?;
+
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .add_filter("Hima backup", &["himabackup"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| format!("invalid path: {e}"))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("could not read file: {e}"))?;
+    let payload = crate::backup::open(&bytes, &passphrase)?;
+
+    let outcome = {
+        let conn = lock(&state)?;
+        let incoming_cats: Vec<db::IncomingCategory> = payload
+            .categories
+            .into_iter()
+            .map(|c| db::IncomingCategory {
+                name: c.name,
+                color: c.color,
+                is_productive: c.is_productive,
+                sort_order: c.sort_order,
+                weekly_target_min: c.weekly_target_min,
+            })
+            .collect();
+        let cats_added = db::ensure_categories(&conn, &incoming_cats)?;
+
+        let entries: Vec<db::IncomingEntry> = payload
+            .entries
+            .into_iter()
+            .map(|e| db::IncomingEntry {
+                date: e.date,
+                time: e.time,
+                ts: (e.ts > 0).then_some(e.ts),
+                activity: e.activity,
+                category: e.category,
+                was_idle: e.was_idle,
+                interval_min: e.interval_min,
+            })
+            .collect();
+        let mut outcome = db::merge_entries(&conn, &state.crypto, &entries)?;
+        outcome.categories_added += cats_added;
+
+        // Portable preferences only, each re-validated like any settings write.
+        for (key, value) in payload.settings {
+            if !db::PORTABLE_SETTING_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            let valid = if key == "interval_minutes" {
+                value.parse::<i64>().is_ok_and(|m| (1..=240).contains(&m))
+            } else {
+                validate_setting(&key, &value).is_ok()
+            };
+            if valid {
+                db::set_setting(&conn, &key, &value)?;
+            }
+        }
+        rearm(&conn)?;
+        outcome
+    };
+
+    let _ = app.emit("refresh-dashboard", ());
+    Ok(Some(outcome))
+}
+
+/// Import a CSV — Hima's own export or the classic kitchen-timer spreadsheet
+/// (FR-18). Same additive merge as restore. Returns `None` on cancel.
+#[tauri::command]
+pub fn import_csv(app: AppHandle, state: State<AppState>) -> Result<Option<ImportSummary>, String> {
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .add_filter("CSV", &["csv"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| format!("invalid path: {e}"))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("could not read file: {e}"))?;
+    let (rows, invalid) = crate::backup::parse_csv(&bytes)?;
+
+    let entries: Vec<db::IncomingEntry> = rows
+        .into_iter()
+        .map(|r| db::IncomingEntry {
+            date: r.date,
+            time: r.time,
+            ts: None,
+            activity: r.activity,
+            category: r.category,
+            was_idle: r.was_idle,
+            interval_min: r.interval_min,
+        })
+        .collect();
+
+    let outcome = {
+        let conn = lock(&state)?;
+        db::merge_entries(&conn, &state.crypto, &entries)?
+    };
+    let _ = app.emit("refresh-dashboard", ());
+    Ok(Some(ImportSummary {
+        imported: outcome.imported,
+        skipped: outcome.skipped,
+        categories_added: outcome.categories_added,
+        invalid: invalid as i64,
+    }))
+}
+
+#[derive(serde::Serialize)]
+pub struct ImportSummary {
+    pub imported: i64,
+    pub skipped: i64,
+    pub categories_added: i64,
+    pub invalid: i64,
+}
+
+/// Answered vs missed vs away intervals over a range — the audit-quality
+/// input to the Findings card (FR-20).
+#[tauri::command]
+pub fn get_answer_stats(
+    state: State<AppState>,
+    start: String,
+    end: String,
+) -> Result<db::AnswerStats, String> {
+    let conn = lock(&state)?;
+    db::answer_stats(&conn, &state.crypto, &start, &end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{csv_field, validate_setting};

@@ -77,6 +77,21 @@ export function shiftMonthISO(iso: string, months: number): string {
   return todayISO(d);
 }
 
+/** January 1st of the year containing `iso`. */
+export function startOfYearISO(iso: string): string {
+  return `${iso.slice(0, 4)}-01-01`;
+}
+
+/** December 31st of the year containing `iso`. */
+export function endOfYearISO(iso: string): string {
+  return `${iso.slice(0, 4)}-12-31`;
+}
+
+/** Shift `iso` by whole years, clamped to January 1st. */
+export function shiftYearISO(iso: string, years: number): string {
+  return `${Number(iso.slice(0, 4)) + years}-01-01`;
+}
+
 /** Signed duration for deltas: 90 → "+1h 30m", -45 → "−45m", 0 → "±0m". */
 export function signedDuration(min: number): string {
   if (min === 0) return "±0m";

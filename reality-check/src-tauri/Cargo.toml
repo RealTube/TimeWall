@@ -1,6 +1,6 @@
 [package]
 name = "reality-check"
-version = "1.1.0"
+version = "1.2.0"
 description = "Hima — the automated time audit. Every interval it asks what you just did and shows where your time actually went, privately and encrypted on-device."
 authors = ["Gevor"]
 license = "MIT"
@@ -31,6 +31,8 @@ chrono = "0.4"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 chacha20poly1305 = "0.10"
+argon2 = "0.5"
+csv = "1"
 base64 = "0.22"
 user-idle = "0.6"
 window-vibrancy = "0.6"

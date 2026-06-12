@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   countdownLabel,
   endOfMonthISO,
+  endOfYearISO,
   formatDuration,
   hhmm,
   hoursDecimal,
@@ -9,9 +10,11 @@ import {
   secondsUntil,
   shiftISO,
   shiftMonthISO,
+  shiftYearISO,
   signedDuration,
   startOfMonthISO,
   startOfWeekISO,
+  startOfYearISO,
   stepValue,
   todayISO,
 } from "./utils";
@@ -79,6 +82,13 @@ describe("date math", () => {
     expect(endOfMonthISO("2028-02-11")).toBe("2028-02-29");
     expect(shiftMonthISO("2026-01-15", 1)).toBe("2026-02-01");
     expect(shiftMonthISO("2026-01-15", -1)).toBe("2025-12-01");
+  });
+
+  it("year helpers anchor on January 1st", () => {
+    expect(startOfYearISO("2026-06-10")).toBe("2026-01-01");
+    expect(endOfYearISO("2026-06-10")).toBe("2026-12-31");
+    expect(shiftYearISO("2026-06-10", -1)).toBe("2025-01-01");
+    expect(shiftYearISO("2026-12-31", 1)).toBe("2027-01-01");
   });
 });
 

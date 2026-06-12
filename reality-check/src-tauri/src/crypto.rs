@@ -51,12 +51,20 @@ impl Crypto {
         })
     }
 
-    /// Seal plaintext into a `nonce || ciphertext` blob suitable for a BLOB column.
-    pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>, String> {
+    /// Build a cipher from a raw 256-bit key that never touches the keychain —
+    /// used for passphrase-derived backup encryption (FR-17).
+    pub fn from_key(key_bytes: &[u8; 32]) -> Self {
+        Self {
+            cipher: XChaCha20Poly1305::new(Key::from_slice(key_bytes)),
+        }
+    }
+
+    /// Seal arbitrary bytes into a `nonce || ciphertext` blob.
+    pub fn encrypt_bytes(&self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
         let ciphertext = self
             .cipher
-            .encrypt(&nonce, plaintext.as_bytes())
+            .encrypt(&nonce, plaintext)
             .map_err(|_| "encryption failed".to_string())?;
         let mut blob = Vec::with_capacity(NONCE_LEN + ciphertext.len());
         blob.extend_from_slice(nonce.as_slice());
@@ -64,17 +72,26 @@ impl Crypto {
         Ok(blob)
     }
 
-    /// Open a `nonce || ciphertext` blob back into its plaintext string.
-    pub fn decrypt(&self, blob: &[u8]) -> Result<String, String> {
+    /// Open a `nonce || ciphertext` blob back into its plaintext bytes.
+    pub fn decrypt_bytes(&self, blob: &[u8]) -> Result<Vec<u8>, String> {
         if blob.len() < NONCE_LEN {
             return Err("ciphertext too short".into());
         }
         let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
         let nonce = XNonce::from_slice(nonce_bytes);
-        let plaintext = self
-            .cipher
+        self.cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| "decryption failed".to_string())?;
+            .map_err(|_| "decryption failed".to_string())
+    }
+
+    /// Seal plaintext into a `nonce || ciphertext` blob suitable for a BLOB column.
+    pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>, String> {
+        self.encrypt_bytes(plaintext.as_bytes())
+    }
+
+    /// Open a `nonce || ciphertext` blob back into its plaintext string.
+    pub fn decrypt(&self, blob: &[u8]) -> Result<String, String> {
+        let plaintext = self.decrypt_bytes(blob)?;
         String::from_utf8(plaintext).map_err(|e| format!("utf8 error: {e}"))
     }
 
@@ -113,5 +130,14 @@ mod tests {
         let last = blob.len() - 1;
         blob[last] ^= 0xff;
         assert!(c.decrypt(&blob).is_err());
+    }
+
+    #[test]
+    fn from_key_round_trips_bytes_and_keys_must_match() {
+        let a = Crypto::from_key(&[9u8; 32]);
+        let blob = a.encrypt_bytes(b"backup payload").unwrap();
+        assert_eq!(a.decrypt_bytes(&blob).unwrap(), b"backup payload");
+        let b = Crypto::from_key(&[10u8; 32]);
+        assert!(b.decrypt_bytes(&blob).is_err());
     }
 }

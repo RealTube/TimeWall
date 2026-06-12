@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Product** | Hima — the automated time audit |
-| **Version** | 1.1 |
-| **Status** | Approved — implemented (1.0 §1–10; 1.1 §11) |
-| **Last updated** | 2026-06-10 |
+| **Version** | 1.2 |
+| **Status** | Approved — implemented (1.0 §1–10; 1.1 §11; 1.2 §12) |
+| **Last updated** | 2026-06-12 |
 | **Platforms** | Windows 10/11, macOS 12+ (Linux best-effort) |
 
 ---
@@ -382,3 +382,141 @@ The timer owns the cadence, but reality doesn't wait for :15.
 3. Docs updated: PRD (this section), ARCHITECTURE (new commands + migration),
    DESIGN (new components), CHANGELOG, README.
 4. Prompt interaction cost unchanged: zero new controls in the prompt window.
+
+---
+
+## 12. Hima 1.2 — "The Long Game"
+
+### 12.1 Why this release
+
+1.1 made the weekly ritual real. Re-auditing the product against its own
+principles (§2) and the field (RescueTime/Rize's rhythm coaching,
+ActivityWatch's data-ownership bar, Daylio's year-at-a-glance) exposes the
+next three leaks — all about the audit's *lifespan*, not its mechanics:
+
+1. **The data is mortal.** Activity text is encrypted with a key that lives
+   only in this machine's OS keychain (§NFR-1). That is exactly right against
+   the threat model — and it means a dead disk, a reinstalled OS, or a new
+   laptop silently destroys months of irreplaceable personal history. "It's
+   your data" (§2.3) is half-true while the user cannot carry it. The same
+   wall blocks the other direction: someone arriving *from* the original
+   kitchen-timer spreadsheet cannot bring their history with them.
+2. **The horizon stops at a month.** Drucker's cadence is weekly *and*
+   annual; the audit's biggest payoff — "what did my year actually look
+   like?" — has no view. (Adjacent products confirm the pull: a
+   year-in-pixels mosaic is Daylio's single most-loved feature.)
+3. **The charts still require interpretation.** Competitors ship AI "coaching"
+   summaries of your day. Hima's privacy-respecting answer is better: the
+   patterns worth naming (your heaviest hours, your fullest day, a focus
+   shift, an unanswered-prompt rate that undermines the totals) are
+   *deterministic* — they can be computed locally and said in plain words.
+   A chart answers a question; a finding answers it out loud.
+
+And one debt to §2.1: the prompt can still get faster. Most check-ins repeat
+recent answers; finishing them should cost one keystroke, not retyping.
+
+**Release theme:** the audit becomes durable (backup, restore, import) and
+long-sighted (the year view, findings) — while the prompt gets *cheaper*.
+
+### 12.2 New functional requirements
+
+#### FR-17 Encrypted backup & restore (P0)
+1. **Back up** writes every entry, category, and (portable) setting into a
+   single file through a native save dialog, encrypted with a key derived
+   from a user-chosen passphrase (Argon2id → XChaCha20-Poly1305). The OS
+   keychain is never required to read a backup — the passphrase is the key.
+2. **Restore** opens a backup through a native open dialog, decrypts with the
+   passphrase, and **merges**: entries already present (same local date +
+   time) are skipped, never duplicated or overwritten; categories are matched
+   by name (case-insensitive) and created when missing; local category
+   config wins over the backup's. Restore is additive by construction — it
+   cannot destroy anything.
+3. Machine-state settings (`paused`, `paused_until`, `next_prompt_at`,
+   `onboarded`) never travel; portable preferences (interval, schedule,
+   theme, …) restore only through the same allow-list as `update_setting`.
+4. Passphrases are required to be ≥ 8 characters, live only in memory, and
+   are never persisted or logged. A wrong passphrase fails loudly and
+   changes nothing.
+5. Honest summary after restore: entries imported, entries skipped,
+   categories added.
+
+#### FR-18 CSV import (P0)
+1. A native open dialog accepts a CSV with headers; `date`, `time`, and
+   `activity` are required, `category`, `was_away`, `interval_minutes` are
+   honored when present. Hima's own CSV export round-trips losslessly.
+2. Same merge semantics as FR-17.2 (dedupe on date+time, categories by
+   name). Malformed rows are skipped and counted, never guessed at (§2.2).
+3. Imported rows respect every honesty rule: their recorded interval is
+   stored as-is (default 15), away rows stay away.
+
+#### FR-19 The year view (P0)
+1. Insights gains a **Year** period beside Week and Month: previous/next
+   navigation, no future years, all existing cards aggregate over the year.
+2. The daily-bars slot shows a **year-in-pixels mosaic** (weeks × weekdays,
+   GitHub-contribution layout): each day's cell intensity is its worked
+   time; hover names the day with worked/productive hours; clicking a day
+   jumps to that week with the day's journal open — the mosaic is a door,
+   not a poster.
+3. The Markdown report for a year summarizes by **month**, not by day.
+4. Weekly targets remain week-only (§FR-16.3).
+
+#### FR-20 Findings — the audit, said out loud (P1)
+1. Insights shows a **"What stands out"** card: up to three plain-language
+   observations computed deterministically from the visible period.
+2. Launch rules (each with a confidence floor, silent below it):
+   - **Rhythm:** the heaviest hour-of-day and fullest weekday (≥ 5 h of
+     data in the period).
+   - **Focus shift:** average focus-block length vs the previous period
+     (≥ 20 % change, both periods with data).
+   - **Answer rate:** share of prompts answered vs missed (≥ 20 asks);
+     praised when ≥ 95 %, flagged as an undercount risk when < 80 %.
+   - **Productive peak:** the weekday with the most productive time
+     (week/month, ≥ 1 h productive).
+3. Copy stays neutral and informational (§2.4): a finding names a pattern,
+   never issues advice, guilt, or alarm. No model, no cloud, no guessing —
+   every sentence is reproducible arithmetic over the user's own rows.
+
+#### FR-21 Ghost autocomplete in the prompt (P1)
+1. While typing in the prompt (and the dashboard quick log), the rest of the
+   best match from the user's recent entries appears inline as ghost text;
+   **Tab** (or **→** at the end of input) accepts it; every other key
+   behaves exactly as before. Zero new controls (§11.5.4) — typing "st" and
+   pressing Tab + Enter logs "standup" in three keystrokes.
+2. Matching is prefix-based, case-insensitive, most-recent-first, over the
+   same recent-entries source as the chips. No fuzziness — a ghost that
+   guesses wrong costs trust (§2.2).
+
+### 12.3 Non-functional deltas
+
+- **NFR-1/-5 (privacy & security):** backup/restore/import add three dialog
+  commands; nothing else touches the I/O surface. Backup files are
+  ciphertext end-to-end (magic + salt + nonce + AEAD payload, documented in
+  SECURITY.md); the passphrase-derived key never touches disk or keychain.
+- **NFR-2 (performance):** year aggregation stays a single indexed range
+  scan; the pixels mosaic renders ≤ 366 cells. Backup of 35 k entries
+  completes < 3 s (Argon2id dominates, by design).
+- **Schema:** no migration — 1.2 ships on schema v3.
+
+### 12.4 Explicitly out of scope (1.2)
+
+- A configurable global check-in hotkey (recorder UX + per-OS conflict
+  handling deserve their own release; 1.3 candidate).
+- Automatic/scheduled backups; cloud sync of backups.
+- Editing or selectively restoring inside a backup file.
+- Mood/energy capture at the prompt (friction; different product).
+- Everything in §7 and §11.4 not named above.
+
+### 12.5 Release criteria (1.2)
+
+1. FR-17…FR-21 implemented; P0s demonstrated on a fresh profile and on a
+   1.1 database; backup→wipe→restore round-trips losslessly (settings
+   allow-list aside) and CSV export→import is idempotent.
+2. New pure logic (backup format & merge, CSV parsing, year date math,
+   findings rules, completion matching) unit-tested in Rust/Vitest; CI fully
+   green (typecheck, Vitest, build, `cargo test`, `clippy -D warnings`,
+   `fmt --check`).
+3. Docs updated: PRD (this section), ARCHITECTURE (backup format, new
+   commands), SECURITY (backup threat model), DESIGN (year mosaic, findings,
+   ghost text), CHANGELOG, README.
+4. Prompt interaction cost strictly decreased: no new controls, repeated
+   entries complete in fewer keystrokes.

@@ -5,12 +5,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { mockInvoke } from "./devMock";
 import type {
   ActivityLog,
+  AnswerStats,
   AppSettings,
   Category,
   CategorySlice,
   DayTotal,
   FocusStats,
   HeatCell,
+  ImportSummary,
+  MergeOutcome,
   SearchHit,
   Streaks,
   ThemePreference,
@@ -78,12 +81,19 @@ export const api = {
   search: (query: string, limit = 60) =>
     call<SearchHit[]>("search_entries", { query, limit }),
   streaks: () => call<Streaks>("get_streaks"),
+  answerStats: (start: string, end: string) =>
+    call<AnswerStats>("get_answer_stats", { start, end }),
 
   // Data ownership
   exportCsv: (start: string, end: string) =>
     call<string | null>("export_csv", { start, end }),
   saveReport: (content: string) => call<string | null>("save_report", { content }),
   eraseAllEntries: () => call<number>("erase_all_entries"),
+  backupCreate: (passphrase: string) =>
+    call<string | null>("backup_create", { passphrase }),
+  backupRestore: (passphrase: string) =>
+    call<MergeOutcome | null>("backup_restore", { passphrase }),
+  importCsv: () => call<ImportSummary | null>("import_csv"),
 
   // Autostart
   setAutostart: (enabled: boolean) => call<void>("set_autostart", { enabled }),

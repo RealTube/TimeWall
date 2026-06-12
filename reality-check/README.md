@@ -38,11 +38,19 @@ browsing. It only ever stores the words you type.
    activities that grew and shrank. Your audit streak is right in the hero.
 6. **Zero-effort categories.** Tag "standup" as Meetings once — every later
    "standup" categorizes itself. Optional weekly targets per category show as
-   a quiet tick, never an alarm.
+   a quiet tick, never an alarm. And after two typed characters the prompt
+   ghost-completes your most recent matching entry — **Tab**, **Enter**, done.
 7. **Total recall.** `Ctrl/⌘ K` searches every word you've ever logged,
    on-device, and jumps to that day's journal.
-8. **It's your data.** Export any range to CSV, save a Markdown report of any
-   week or month for a coach — or erase everything with two clicks.
+8. **The long view.** A **Year** period turns the audit into a year-in-pixels
+   mosaic — every day a cell, click any one to reopen that week — and a
+   **"What stands out"** card says the period's patterns in plain words
+   ("Your heaviest hour is 9–10 AM, and Tuesdays carry the most time"),
+   computed on-device, never by a cloud.
+9. **It's your data — durably.** Export any range to CSV, save a Markdown
+   report for a coach, **back up everything into one passphrase-encrypted
+   file that restores on any machine**, import your old kitchen-timer
+   spreadsheet — or erase everything with two clicks.
 
 ## Install
 
@@ -92,9 +100,10 @@ it's a system webview, not a bundled browser.
 
 Hima makes zero network requests. The only content it stores is the text you
 type, AEAD-encrypted on disk with a key that never leaves your OS credential
-store. Aggregates (hours, heatmaps, rankings) are computed locally. Export is
-the only way data leaves the app, and it goes where you point it. Deleting
-your data is a first-class feature, not a support ticket.
+store. Aggregates (hours, heatmaps, rankings, findings) are computed locally. Export
+is the only way data leaves the app, and it goes where you point it — and the
+backup file stays encrypted end-to-end, locked by a passphrase only you know.
+Deleting your data is a first-class feature, not a support ticket.
 
 ## License
 

@@ -11,9 +11,11 @@ and what is explicitly out of scope.
 2. **You type it, we keep it.** The only content stored is the text the user
    types (plus timestamps, interval length, category id, idle flag). Hima
    never reads window titles, app usage, browser history, or the screen.
-3. **Data leaves only by explicit export.** The CSV export writes to a path
-   the user picks in a native save dialog; the exported file is plaintext by
-   design (that is its purpose) and becomes the user's responsibility.
+3. **Data leaves only by explicit export.** The CSV export and Markdown
+   report write to a path the user picks in a native save dialog; those files
+   are plaintext by design (that is their purpose) and become the user's
+   responsibility. The encrypted backup (below) is the one export that stays
+   ciphertext end-to-end.
 
 ## Encryption at rest
 
@@ -29,6 +31,32 @@ and what is explicitly out of scope.
   aggregates run as indexed SQL. The *content* is protected; the *shape* of
   the week (that something happened at 14:15) is not.
 
+## Encrypted backups (1.2)
+
+The keychain-bound key is exactly right against the local threat model — and
+it means the database alone is unreadable anywhere else. Backups exist so the
+user's history can survive a dead disk or move to a new machine *without*
+weakening the at-rest story:
+
+- **File format:** `HIMABKP1 ‖ salt(16) ‖ nonce(24) ‖ ciphertext`. The payload
+  (entries, categories, portable settings as JSON) is sealed with
+  XChaCha20-Poly1305.
+- **Key:** derived from a user-chosen passphrase (≥ 8 chars) with **Argon2id**
+  (19 MiB, t=2, p=1 — the RustCrypto defaults) and a fresh random salt per
+  backup. The OS keychain is not involved; the passphrase is the only key.
+- **Passphrase handling:** lives in memory for the duration of the command;
+  never persisted, never logged. There is no recovery path — a forgotten
+  passphrase means an unreadable backup, by design.
+- **Restore is additive:** existing (date, time) rows are never overwritten;
+  settings are restored only through the same allow-list + validation as any
+  settings write; machine state (`paused`, `next_prompt_at`, `onboarded`)
+  never travels.
+- **Tampering:** AEAD authentication rejects modified backups outright; a
+  wrong passphrase and a corrupted file are deliberately indistinguishable.
+- **CSV import** accepts plaintext the user already has (their old
+  spreadsheet, a Hima export). It reads one user-picked file, validates every
+  row, and never writes anything back to that file.
+
 ## Threat model
 
 | Threat | Protected? | Mechanism / note |
@@ -38,6 +66,8 @@ and what is explicitly out of scope.
 | DB tampering (forged or altered entries) | **Detected** | AEAD authentication fails on modified blobs. |
 | Malicious webview content / XSS-style escalation | **Mitigated** | Strict CSP (no remote sources, `frame-ancestors 'none'`, `object-src 'none'`); minimal Tauri capability set; the webview can only call the allow-listed, validated commands — it never sees SQL or the key. |
 | SQL injection | **Mitigated** | Parameterized statements only; settings writes go through a key allow-list with per-key validation; inputs are trimmed and length-capped. |
+| Backup file stolen in transit or at rest (email, USB stick, cloud drive) | **Yes** | Argon2id-derived key + AEAD; brute force is gated by the passphrase's strength and a memory-hard KDF. |
+| Weak backup passphrase | **Partially** | The app enforces ≥ 8 characters; ultimate strength is the user's choice — stated in the UI. |
 | Malware running *as the user*, or an attacker with the user's unlocked session | **No** | Such an attacker can read the credential store like the app does. This is outside any local app's threat model. |
 | Forensic traffic analysis of timestamps/categories | **No** | Metadata is plaintext by design (see above). |
 | Memory inspection of a running process | **No** | Decrypted strings exist in process memory while displayed. |

@@ -90,3 +90,22 @@ export interface Streaks {
   best: number;
   days_logged: number;
 }
+
+/** Answered vs missed prompts (plus away intervals) over a range (FR-20). */
+export interface AnswerStats {
+  answered: number;
+  missed: number;
+  away: number;
+}
+
+/** Result of a backup restore — additive merge, nothing destroyed (FR-17). */
+export interface MergeOutcome {
+  imported: number;
+  skipped: number;
+  categories_added: number;
+}
+
+/** Result of a CSV import (FR-18): a merge plus a count of rejected rows. */
+export interface ImportSummary extends MergeOutcome {
+  invalid: number;
+}

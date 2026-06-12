@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { CornerDownLeft } from "lucide-react";
 import { api } from "../lib/api";
 import { Chip } from "../components/ui/Chip";
+import { GhostInput } from "../components/ui/GhostInput";
 import type { Category } from "../lib/types";
 
 export default function Prompt() {
@@ -20,7 +21,8 @@ export default function Prompt() {
   const soundOn = useRef(true);
 
   const refreshData = useCallback(() => {
-    api.recent(6).then(setRecent).catch(() => {});
+    // 24 recents: the first 6 become chips, the rest feed ghost completion.
+    api.recent(24).then(setRecent).catch(() => {});
     api.categories().then(setCategories).catch(() => {});
     api
       .settings()
@@ -107,14 +109,12 @@ export default function Prompt() {
                 submit(activity);
               }}
             >
-              <input
-                ref={inputRef}
+              <GhostInput
+                inputRef={inputRef}
                 value={activity}
-                onChange={(e) => setActivity(e.target.value)}
+                onChange={setActivity}
+                recent={recent}
                 placeholder="Type 1–2 words…"
-                autoComplete="off"
-                spellCheck={false}
-                maxLength={200}
                 className="w-full bg-transparent text-[30px] font-semibold leading-tight tracking-tight text-fg placeholder:text-muted/40 focus:outline-none"
               />
             </form>
@@ -142,7 +142,7 @@ export default function Prompt() {
                 <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-muted/70">
                   Again
                 </span>
-                {recent.map((r) => (
+                {recent.slice(0, 6).map((r) => (
                   <Chip key={r} className="shrink-0" onClick={() => submit(r)}>
                     {r}
                   </Chip>
